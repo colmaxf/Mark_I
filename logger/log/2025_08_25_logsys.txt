@@ -1,0 +1,237 @@
+2025-08-25 17:17:09 [INFO]    [main:252] [Main Thread] System initialized
+2025-08-25 17:17:09 [INFO]    [plc_thread_func:73] [PLC Thread] Starting...
+2025-08-25 17:17:09 [INFO]    [plc_thread_func:89] [PLC Thread] Connection attempt 1/3
+2025-08-25 17:17:09 [INFO]    [connect:76] Connected to PLC at 192.168.3.5:5000
+2025-08-25 17:17:09 [INFO]    [plc_thread_func:102] [PLC Thread] Connected to PLC successfully
+2025-08-25 17:17:09 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:17:12 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:17:15 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D100_1234
+2025-08-25 17:17:18 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:17:21 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D101_5678
+2025-08-25 17:17:24 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:17:27 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: INVALID_COMMAND
+2025-08-25 17:17:30 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:17:33 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:17:36 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D100_1234
+2025-08-25 17:17:39 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:17:43 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D101_5678
+2025-08-25 17:17:46 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:17:49 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: INVALID_COMMAND
+2025-08-25 17:17:52 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:17:55 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:17:58 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D100_1234
+2025-08-25 17:18:01 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:18:04 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D101_5678
+2025-08-25 17:18:07 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:46:08 [INFO]    [main:252] [Main Thread] System initialized
+2025-08-25 17:46:08 [INFO]    [plc_thread_func:73] [PLC Thread] Starting...
+2025-08-25 17:46:08 [INFO]    [plc_thread_func:89] [PLC Thread] Connection attempt 1/3
+2025-08-25 17:46:08 [INFO]    [connect:97] Connected to PLC at 192.168.3.5:5000
+2025-08-25 17:46:08 [INFO]    [plc_thread_func:102] [PLC Thread] Connected to PLC successfully
+2025-08-25 17:46:08 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:46:08 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:46:08 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:46:11 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:46:11 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:46:11 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:46:14 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D100_1234
+2025-08-25 17:46:14 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0xD2 0x04
+2025-08-25 17:46:14 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:46:17 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:46:17 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:46:17 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:46:20 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D101_5678
+2025-08-25 17:46:20 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0x2E 0x16
+2025-08-25 17:46:20 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:46:23 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:46:23 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:46:23 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:46:26 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: INVALID_COMMAND
+2025-08-25 17:46:29 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:46:29 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:46:29 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:46:32 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:46:32 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:46:32 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:46:35 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D100_1234
+2025-08-25 17:46:35 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0xD2 0x04
+2025-08-25 17:46:35 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:46:38 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:46:38 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:46:38 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:46:41 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D101_5678
+2025-08-25 17:46:41 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0x2E 0x16
+2025-08-25 17:46:41 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:46:44 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:46:44 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:46:44 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:46:47 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: INVALID_COMMAND
+2025-08-25 17:46:50 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:46:50 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:46:50 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:46:53 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:46:53 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:46:53 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:46:56 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D100_1234
+2025-08-25 17:46:56 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0xD2 0x04
+2025-08-25 17:46:56 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:46:59 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:46:59 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:46:59 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:47:02 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D101_5678
+2025-08-25 17:47:02 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0x2E 0x16
+2025-08-25 17:47:02 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:47:05 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:47:05 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:47:05 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:47:08 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: INVALID_COMMAND
+2025-08-25 17:47:11 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:47:11 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:47:11 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:47:14 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:47:14 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:47:14 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:47:17 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D100_1234
+2025-08-25 17:47:17 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0xD2 0x04
+2025-08-25 17:47:17 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:47:20 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:47:20 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:47:20 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:47:23 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D101_5678
+2025-08-25 17:47:23 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0x2E 0x16
+2025-08-25 17:47:23 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:47:26 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:47:26 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:47:26 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:47:29 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: INVALID_COMMAND
+2025-08-25 17:48:12 [INFO]    [main:252] [Main Thread] System initialized
+2025-08-25 17:48:12 [INFO]    [plc_thread_func:73] [PLC Thread] Starting...
+2025-08-25 17:48:12 [INFO]    [plc_thread_func:89] [PLC Thread] Connection attempt 1/3
+2025-08-25 17:48:12 [INFO]    [connect:97] Connected to PLC at 192.168.3.5:5000
+2025-08-25 17:48:12 [INFO]    [plc_thread_func:102] [PLC Thread] Connected to PLC successfully
+2025-08-25 17:48:12 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:48:12 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:48:12 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:48:12 [INFO]    [readWords:223] [MCProtocol] Received data: 0x04D2
+2025-08-25 17:48:15 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:48:15 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:48:15 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:48:15 [INFO]    [readWords:223] [MCProtocol] Received data: 0x162E
+2025-08-25 17:48:18 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D100_1234
+2025-08-25 17:48:18 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0xD2 0x04
+2025-08-25 17:48:18 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:48:21 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:48:21 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:48:21 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:48:21 [INFO]    [readWords:223] [MCProtocol] Received data: 0x04D2
+2025-08-25 17:48:24 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D101_5678
+2025-08-25 17:48:24 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0x2E 0x16
+2025-08-25 17:48:24 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:48:27 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:48:27 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:48:27 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:48:27 [INFO]    [readWords:223] [MCProtocol] Received data: 0x162E
+2025-08-25 17:48:30 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: INVALID_COMMAND
+2025-08-25 17:48:33 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:48:33 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:48:33 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:48:33 [INFO]    [readWords:223] [MCProtocol] Received data: 0x04D2
+2025-08-25 17:48:36 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:48:36 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:48:36 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:48:36 [INFO]    [readWords:223] [MCProtocol] Received data: 0x162E
+2025-08-25 17:48:39 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D100_1234
+2025-08-25 17:48:39 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0xD2 0x04
+2025-08-25 17:48:39 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:48:42 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:48:42 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:48:42 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:48:42 [INFO]    [readWords:223] [MCProtocol] Received data: 0x04D2
+2025-08-25 17:48:45 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D101_5678
+2025-08-25 17:48:45 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0x2E 0x16
+2025-08-25 17:48:45 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:48:48 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:48:48 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:48:48 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:48:48 [INFO]    [readWords:223] [MCProtocol] Received data: 0x162E
+2025-08-25 17:48:51 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: INVALID_COMMAND
+2025-08-25 17:48:54 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:48:54 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:48:54 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:48:54 [INFO]    [readWords:223] [MCProtocol] Received data: 0x04D2
+2025-08-25 17:48:57 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:48:57 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:48:57 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:48:57 [INFO]    [readWords:223] [MCProtocol] Received data: 0x162E
+2025-08-25 17:49:00 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D100_1234
+2025-08-25 17:49:00 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0xD2 0x04
+2025-08-25 17:49:00 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:49:03 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:49:03 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:49:03 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:49:03 [INFO]    [readWords:223] [MCProtocol] Received data: 0x04D2
+2025-08-25 17:49:06 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D101_5678
+2025-08-25 17:49:06 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0x2E 0x16
+2025-08-25 17:49:06 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:49:09 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:49:09 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:49:10 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:49:10 [INFO]    [readWords:223] [MCProtocol] Received data: 0x162E
+2025-08-25 17:49:13 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: INVALID_COMMAND
+2025-08-25 17:49:16 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:49:16 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:49:16 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:49:16 [INFO]    [readWords:223] [MCProtocol] Received data: 0x04D2
+2025-08-25 17:49:19 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:49:19 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:49:19 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:49:19 [INFO]    [readWords:223] [MCProtocol] Received data: 0x162E
+2025-08-25 17:49:22 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D100_1234
+2025-08-25 17:49:22 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0xD2 0x04
+2025-08-25 17:49:22 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:49:25 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:49:25 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:49:25 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:49:25 [INFO]    [readWords:223] [MCProtocol] Received data: 0x04D2
+2025-08-25 17:49:28 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D101_5678
+2025-08-25 17:49:28 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0x2E 0x16
+2025-08-25 17:49:28 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:49:31 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:49:31 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:49:31 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:49:31 [INFO]    [readWords:223] [MCProtocol] Received data: 0x162E
+2025-08-25 17:49:34 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: INVALID_COMMAND
+2025-08-25 17:49:37 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:49:37 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:49:37 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:49:37 [INFO]    [readWords:223] [MCProtocol] Received data: 0x04D2
+2025-08-25 17:49:40 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:49:40 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:49:40 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:49:40 [INFO]    [readWords:223] [MCProtocol] Received data: 0x162E
+2025-08-25 17:49:43 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D100_1234
+2025-08-25 17:49:43 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0xD2 0x04
+2025-08-25 17:49:43 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:49:46 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:49:46 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:49:46 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:49:46 [INFO]    [readWords:223] [MCProtocol] Received data: 0x04D2
+2025-08-25 17:49:49 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D101_5678
+2025-08-25 17:49:49 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0x2E 0x16
+2025-08-25 17:49:49 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
+2025-08-25 17:49:52 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:49:52 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:49:52 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:49:52 [INFO]    [readWords:223] [MCProtocol] Received data: 0x162E
+2025-08-25 17:49:55 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: INVALID_COMMAND
+2025-08-25 17:49:58 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D100
+2025-08-25 17:49:58 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:49:58 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0xD2 0x04
+2025-08-25 17:49:58 [INFO]    [readWords:223] [MCProtocol] Received data: 0x04D2
+2025-08-25 17:50:01 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: READ_D101
+2025-08-25 17:50:01 [INFO]    [readWords:169] [MCProtocol] Sending request: 0x01 0xFF 0x0A 0x00 0x65 0x00 0x00 0x00 0x20 0x44 0x01 0x00
+2025-08-25 17:50:01 [INFO]    [readWords:186] [MCProtocol] Received response: 0x81 0x00 0x2E 0x16
+2025-08-25 17:50:01 [INFO]    [readWords:223] [MCProtocol] Received data: 0x162E
+2025-08-25 17:50:04 [INFO]    [plc_thread_func:141] [PLC Thread] Received command: WRITE_D100_1234
+2025-08-25 17:50:04 [INFO]    [writeWords:271] [MCProtocol] Sending request: 0x03 0xFF 0x0A 0x00 0x64 0x00 0x00 0x00 0x20 0x44 0x01 0x00 0xD2 0x04
+2025-08-25 17:50:04 [INFO]    [writeWords:288] [MCProtocol] Received response: 0x83 0x00
