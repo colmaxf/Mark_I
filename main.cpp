@@ -166,7 +166,7 @@ struct SystemState {
 
 // Queue để truyền convex hull giữa các thread
 // Communication queues
-ThreadSafeQueue<std::vector<Point2D>> convex_hull_queue;
+ThreadSafeQueue<std::vector<Point2D>> stable_points_queue;
 ThreadSafeQueue<std::string> lidar_status_queue;
 
 // ENHANCED PLC THREAD WITH PROPER ERROR HANDLING
@@ -337,139 +337,180 @@ void lidar_thread_func(
         return;
     }
 
+    // ====== THIẾT LẬP DUAL MODE PROCESSING ======
+    
+    // 1. REALTIME CALLBACK - Phản hồi nhanh cho obstacle detection
+    lidar_processor->setRealtimeCallback([&state, &plc_command_queue](const std::vector<LidarPoint>& points) {
+        // Khởi tạo khoảng cách tối thiểu cho từng hướng
+        float min_front_left = 999.0f;   // 270°-315°
+        float min_front_right = 999.0f;  // 45°-90°
+        float min_left = 999.0f;         // 225°-270°
+        float min_right = 999.0f;        // 90°-135°
+        float min_front = 999.0f;        // 135°-225°
+        
+        // Phân tích từng điểm
+        for (const auto& point : points) {
+            float angle_deg = point.angle * 180.0f / M_PI;
+            
+            if (angle_deg >= 270.0 && angle_deg <= 315.0) {// Trái
+                min_left = std::min(min_left, point.distance);
+            }
+            else if (angle_deg >= 45.0 && angle_deg <= 90.0) {// Phải
+                min_right = std::min(min_right, point.distance);
+            }
+            else if (angle_deg >= 225.0 && angle_deg < 270.0) {// Phía trước-trái
+                min_front_left = std::min(min_front_left, point.distance);
+            }
+            else if (angle_deg > 90.0 && angle_deg <= 135.0) {// Phía trước-phải
+                min_front_right = std::min(min_front_right, point.distance);
+            }
+            else if (angle_deg > 135.0 && angle_deg < 225.0) {// Phía trước
+                min_front = std::min(min_front, point.distance);
+            }
+        }
+        
+        // Xử lý phản hồi NHANH cho vật cản phía trước
+        if (min_front < 999.0f) {
+            float min_dist_cm = min_front * 100.0f;
+            
+            // Gửi lệnh PLC ngay lập tức
+            if (min_dist_cm > 50.0f) {
+                plc_command_queue.push("WRITE_D_100_1");
+                // Debug output với màu xanh cho an toàn
+                std::cout << "\033[32m[REALTIME] Path clear: " << std::fixed << std::setprecision(2) 
+                         << min_dist_cm << "cm\033[0m" << std::endl;
+            } else {
+                plc_command_queue.push("WRITE_D_100_0");
+                // Debug output với màu đỏ cho cảnh báo
+                std::cout << "\033[31m[REALTIME WARNING] Obstacle detected: " << std::fixed << std::setprecision(2)
+                         << min_dist_cm << "cm\033[0m" << std::endl;
+            }
+            
+            // Cập nhật state với thông tin realtime
+            {
+                std::lock_guard<std::mutex> lock(state.state_mutex);
+                state.last_lidar_data = "[RT] Front: " + std::to_string(min_dist_cm) + "cm | " +
+                                       "L: " + std::to_string((int)(min_left*100)) + "cm | " +
+                                       "R: " + std::to_string((int)(min_right*100)) + "cm";
+            }
+        }
+    });
+// 2. STABLE CALLBACK - Dữ liệu ổn định cho server
+    lidar_processor->setStablePointsCallback([&state, &points_queue](const std::vector<LidarPoint>& stable_points) {
+        if (stable_points.empty()) return;
+        
+        // Chuyển đổi sang Point2D
+        std::vector<Point2D> stable_2d;
+        stable_2d.reserve(stable_points.size());
+        
+        for(const auto& p : stable_points) {
+            stable_2d.push_back({p.x, p.y});
+        }
+        
+        // Cập nhật state cho monitoring
+        {
+            std::lock_guard<std::mutex> lock(state.state_mutex);
+            state.latest_convex_hull = stable_2d;
+            state.total_stable_hulls++;
+        }
+        
+        // Gửi vào queue cho server
+        points_queue.push(stable_2d);
+        
+        // Log với màu xanh dương cho stable data
+        std::cout << "\033[34m[STABLE DATA] Processed " << stable_2d.size() 
+                 << " points for server (Total stable scans: " 
+                 << state.total_stable_hulls << ")\033[0m" << std::endl;
+    });
+    
+    // 3. Điều chỉnh tham số cho cân bằng giữa realtime và stability
+    lidar_processor->setStabilizerParams(
+        3,      // history_window - đủ để ổn định nhưng không quá chậm
+        0.05f,  // stability_threshold - độ chính xác vừa phải
+        0.15f   // outlier_threshold - loại bỏ nhiễu
+    );
+    
+    // Thiết lập noise filter cho dữ liệu sạch hơn
+    lidar_processor->setNoiseFilterParams(
+        0.05f,  // min_distance: 5cm
+        50.0f,  // max_distance: 50m
+        0.5f,   // max_angle_jump
+        2       // min_neighbors
+    );
+
+    // Bắt đầu xử lý
+    if (!lidar_processor->start()) {
+#ifdef ENABLE_LOG
+        LOG_ERROR << "[LiDAR Thread] Failed to start LidarProcessor.";
+#else
+        std::cerr << "[LiDAR Thread] Failed to start LidarProcessor." << std::endl;
+#endif
+        {
+            std::lock_guard<std::mutex> lock(state.state_mutex);
+            state.lidar_connected = false;
+            state.last_lidar_data = "Lidar start failed";
+        }
+        return;
+    }
+
     // Cập nhật trạng thái thành công
     {
         std::lock_guard<std::mutex> lock(state.state_mutex);
         state.lidar_connected = true;
-        state.last_lidar_data = "Lidar connected and running";
+        state.last_lidar_data = "Lidar connected - Dual mode active";
     }
 
+    std::cout << "\033[32m[LiDAR Thread] Successfully started with dual-mode processing:\033[0m" << std::endl;
+    std::cout << "  - REALTIME mode: Obstacle detection with immediate response" << std::endl;
+    std::cout << "  - STABLE mode: Filtered data for server upload" << std::endl;
 
-    // Bước 3: Vòng lặp chính để xử lý dữ liệu
+    // Biến để theo dõi hiệu suất
+    auto last_stats_time = std::chrono::steady_clock::now();
+    const auto stats_interval = std::chrono::seconds(10);
+
+    // Main monitoring loop
     while (global_running) {
-        // Lấy dữ liệu điểm đã được ổn định từ thư viện
-        std::vector<LidarPoint> stable_points = lidar_processor->getStablePoints();
-
-        if (stable_points.empty()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            continue; // Bỏ qua nếu chưa có dữ liệu
-        }
-
-        // --- Cập nhật trạng thái hệ thống ---
-        std::vector<Point2D> current_points_2d;
-        current_points_2d.reserve(stable_points.size());
-        for(const auto& p : stable_points) {
-            current_points_2d.push_back({p.x, p.y});
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(state.state_mutex);
-            state.last_lidar_data = "Received " + std::to_string(stable_points.size()) + " stable points.";
-            state.latest_convex_hull = current_points_2d; // Sử dụng lại trường này để lưu các điểm
-        }
-
-        // Gửi dữ liệu điểm sang các luồng khác nếu cần
-        points_queue.push(current_points_2d);
-        std::cout<<"[LiDAR Thread] Pushed " << current_points_2d.size() << " points to queue." << std::endl;
-        std::cout<<current_points_2d.data()<<std::endl;
-
-        // --- Phân tích vật cản phía trước ---
-        float min_distance_in_front = 100.0f; // Khởi tạo khoảng cách lớn
-        bool obstacle_found = false;
-
-        // Khởi tạo khoảng cách tối thiểu cho từng hướng
-        float min_front_left = 999.0;   // 270°-315°
-        float min_front_right = 999.0;  // 45°-90°
-        float min_left = 999.0;         // 225°-270°
-        float min_right = 999.0;        // 90°-135°
-        float min_front = 999.0;         // 135°-225°
-        float min_front_distance = 0;
-        int count_front_left = 0, count_front_right = 0;
-        int count_left = 0, count_right = 0, count_back = 0;
-            
-        for (const auto& point : stable_points) {
-            float angle = point.angle * 180.0f / M_PI; // Radian sang độ
-
-             if (angle >= 270.0 && angle <= 315.0) {
-                        // Trái
-                min_left = std::min(min_left, point.distance);
-                count_left++;
+        auto current_time = std::chrono::steady_clock::now();
+        
+        // In thống kê định kỳ
+        if (current_time - last_stats_time >= stats_interval) {
+            if (lidar_processor->isProcessing()) {
+                std::cout << "\n\033[36m=== LIDAR PERFORMANCE STATS ===\033[0m" << std::endl;
+                std::cout << "Processing Rate: " << std::fixed << std::setprecision(1) 
+                         << lidar_processor->getProcessingRate() << " Hz" << std::endl;
+                std::cout << "Stability Score: " << std::fixed << std::setprecision(1)
+                         << lidar_processor->getStabilityScore() * 100 << "%" << std::endl;
+                std::cout << "Data Validity: " << std::fixed << std::setprecision(1)
+                         << lidar_processor->getDataValidityRatio() * 100 << "%" << std::endl;
+                std::cout << "Total Scans: " << lidar_processor->getTotalScans() 
+                         << " | Valid: " << lidar_processor->getValidScans()
+                         << " | Stable: " << lidar_processor->getStableScans() << std::endl;
+                std::cout << "Uptime: " << std::fixed << std::setprecision(1)
+                         << lidar_processor->getUptime() << " seconds" << std::endl;
+                std::cout << "\033[36m===============================\033[0m\n" << std::endl;
             }
-            else if (angle >= 45.0 && angle <= 90.0) {
-                           // Phải
-                min_right = std::min(min_right, point.distance);
-                count_right++;
-            }
-            else if (angle >= 225.0 && angle < 270.0) {
-
-
-                // Phía trước-trái
-                min_front_left = std::min(min_front_left, point.distance);
-                count_front_left++;
-            }
-            else if (angle > 90.0 && angle <= 135.0) {
-                            // Phía trước-phải
-                min_front_right = std::min(min_front_right, point.distance);
-                count_front_right++;
-            }
-            else if (angle > 135.0 && angle < 225.0) {
-
-                // Phía trước
-                min_front = std::min(min_front, point.distance);
-                count_back++;
-            }
-            
+            last_stats_time = current_time;
         }
-
-
-            // Hiển thị kết quả
-    std::cout << std::fixed << std::setprecision(2);
-    std::cout << "=== PHÁT HIỆN VẬT CẢN ===" << std::endl;
-    // std::cout << "Tổng điểm: " << points.size() << std::endl;
-    std::cout << "Trước-Trái (270°-315°): " << min_front_left << "m (" << count_front_left << " điểm)" << std::endl;
-    std::cout << "Trước-Phải (45°-90°):   " << min_front_right << "m (" << count_front_right << " điểm)" << std::endl;
-    std::cout << "Trái (225°-270°):       " << min_left << "m (" << count_left << " điểm)" << std::endl;
-    std::cout << "Phải (90°-135°):        " << min_right << "m (" << count_right << " điểm)" << std::endl;
-    std::cout << "Sau (135°-225°):        " << min_front << "m (" << count_back << " điểm)" << std::endl;
-
-        if (min_front < 1.0) {
-            std::cout << "*** CẢNH BÁO: Vật cản gần phía trước (" << min_front << "m) ***" << std::endl;
+        
+        // Kiểm tra kết nối
+        if (!lidar_processor->isConnected()) {
+            std::cerr << "\033[31m[LiDAR Thread] Connection lost! Attempting to reconnect...\033[0m" << std::endl;
+            // TODO: Implement reconnection logic if needed
         }
-        // --- Ra quyết định và gửi lệnh cho PLC ---
-        // Chuyển đổi khoảng cách từ mét sang centimet
-        float min_dist_cm = min_front * 100.0f;
-
-        // Nếu không có vật cản hoặc vật cản ở xa hơn 50cm
-        if ( min_dist_cm > 50.0f) {
-            // Gửi lệnh GHI giá trị 1 vào thanh ghi D100
-           // plc_command_queue.push("WRITE_D_100_1"); //comment for test
-           std::cout << "[LiDAR Thread] Path is clear (dist > 50cm). Sending command WRITE_D_100_1" << std::endl;
-#ifdef ENABLE_LOG
-            LOG_INFO << "[LiDAR Thread] Path is clear (dist > 50cm). Sending command WRITE_D_100_1";
-#endif
-        } else {
-            // Ngược lại, có vật cản trong phạm vi 50cm
-            // Gửi lệnh GHI giá trị 0 vào thanh ghi D100
-           // plc_command_queue.push("WRITE_D_100_0");
-           std::cout << "[LiDAR Thread] Obstacle detected at " << min_dist_cm << " cm. Sending command WRITE_D100_0" << std::endl;
-#ifdef ENABLE_LOG
-            LOG_WARNING << "[LiDAR Thread] Obstacle detected at " << min_dist_cm << " cm. Sending command WRITE_D100_0";
-#endif
-        }
-
-        // Chờ một khoảng thời gian ngắn để giảm tải CPU
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    // Dừng xử lý LiDAR trước khi kết thúc luồng
+    // Dừng xử lý LiDAR
+    std::cout << "[LiDAR Thread] Shutting down..." << std::endl;
     lidar_processor->stop();
+    
 #ifdef ENABLE_LOG
-    LOG_INFO << "[LiDAR Thread] Stopped.";
+    LOG_INFO << "[LiDAR Thread] Stopped successfully.";
 #else
-    std::cout << "[LiDAR Thread] Stopped." << std::endl;
+    std::cout << "[LiDAR Thread] Stopped successfully." << std::endl;
 #endif
 }
-
 
 // Luồng giám sát Pin
 // void battery_thread_func(SystemState& state) {
@@ -515,7 +556,12 @@ int main() {
     //                       std::ref(plc_command_queue), std::ref(plc_result_queue));
     // KHỞI CHẠY LUỒNG LIDAR
     std::thread lidar_thread(lidar_thread_func, std::ref(shared_state),
-                           std::ref(convex_hull_queue), std::ref(plc_command_queue));
+                           std::ref(stable_points_queue), std::ref(plc_command_queue));
+    //Server thread
+    // std::thread webserver_thread(webserver_thread_func, std::ref(shared_state), std::ref(stable_points_queue));
+    //Battery thread
+    // std::thread battery_thread(battery_thread_func, std::ref(shared_state)); 
+
 
     // Vòng lặp chính của main thread có thể để trống hoặc làm nhiệm vụ giám sát
     while (global_running) {
