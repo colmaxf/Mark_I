@@ -7,6 +7,7 @@
 #include <queue>
 #include <chrono>
 #include <memory>
+#include <cmath>
 
 #include "config.h"
 #ifdef ENABLE_LOG
@@ -55,6 +56,89 @@ private:
     std::condition_variable m_cond;
 };
 
+
+// --- PLC Command Parsing and Execution ---
+/**
+ * @brief Phân tích chuỗi lệnh và thực thi hành động tương ứng trên PLC.
+ * @param command Chuỗi lệnh (ví dụ: "READ_D100", "WRITE_M50_1").
+ * @param plc Đối tượng MCProtocol đã kết nối.
+ * @return Chuỗi kết quả của hành động.
+ */
+std::string parseAndExecutePlcCommand(const std::string& command, MCProtocol& plc) {
+    std::stringstream ss(command);
+    std::string command_part;
+    std::string device_part;
+    uint32_t address;
+    uint16_t value;
+
+    // Tách lệnh theo dấu '_'
+    std::getline(ss, command_part, '_');
+    std::getline(ss, device_part, '_');
+
+    if (command_part.empty() || device_part.empty()) {
+        return "Invalid command format: " + command;
+    }
+
+    // Lấy device và address
+    std::string device_type = device_part.substr(0, 1);
+    try {
+        address = std::stoul(device_part.substr(1));
+    } catch (const std::invalid_argument& e) {
+        return "Invalid address in command: " + command;
+    }
+
+    // Kiểm tra các device được hỗ trợ
+    if (device_type != "D" && device_type != "M" && device_type != "C" && device_type != "Y") {
+        return "Unsupported device type: " + device_type;
+    }
+
+    if (command_part == "READ") {
+        // Các thanh ghi D, C là word
+        if (device_type == "D" || device_type == "C") {
+            uint16_t read_value = plc.readSingleWord(device_type, address);
+            return device_part + " = " + std::to_string(read_value);
+        }
+        // Các thanh ghi M, Y là bit, đọc theo word
+        else if (device_type == "M" || device_type == "Y") {
+            auto words = plc.readBits(device_type, address, 1);
+            return device_part + " (word) = " + std::to_string(words[0]);
+        }
+    } else if (command_part == "WRITE") {
+        // Đọc giá trị từ phần còn lại của command
+        std::string remaining;
+        std::getline(ss, remaining);
+        
+        // Loại bỏ dấu '_' đầu tiên nếu có
+        if (!remaining.empty() && remaining[0] == '_') {
+            remaining = remaining.substr(1);
+        }
+        
+        try {
+            value = std::stoul(remaining);
+        } catch (const std::invalid_argument& e) {
+            return "Invalid value for WRITE command: " + command;
+        } catch (const std::out_of_range& e) {
+            return "Value out of range for WRITE command: " + command;
+        }
+
+        bool success = plc.writeSingleWord(device_type, address, value);
+        return success ? "Write " + device_part + " = " + std::to_string(value) + " OK"
+                       : "Write " + device_part + " FAILED";
+    }
+    else {
+        return "Unknown command: " + command_part;
+    }
+    
+    //tránh warning
+    return "Unexpected error";
+};
+
+// Biến toàn cục để điều khiển việc dừng các luồng một cách an toàn
+std::atomic<bool> global_running{true};
+// Cấu trúc Point2D đơn giản để tương thích với SystemState
+struct Point2D {
+    float x, y;
+};
 // SYSTEM STATE STRUCT
 struct SystemState {
     std::mutex state_mutex;
@@ -63,14 +147,14 @@ struct SystemState {
     double battery_level = 0.0;
     
     // PLC data
-    std::string last_lidar_data = "Chưa có dữ liệu Lidar";
     bool plc_connected = false;
+    std::string last_plc_status = "Chưa có dữ liệu PLC";
+
 
     // LiDAR data
     std::string last_lidar_data = "Chưa có dữ liệu Lidar";
     bool lidar_connected = false;
     std::vector<Point2D> latest_convex_hull;
-    RobotPose current_robot_pose;
     int total_stable_hulls = 0;
     int total_scan_count = 0;
     
@@ -83,7 +167,6 @@ struct SystemState {
 // Queue để truyền convex hull giữa các thread
 // Communication queues
 ThreadSafeQueue<std::vector<Point2D>> convex_hull_queue;
-ThreadSafeQueue<RobotPose> pose_queue;
 ThreadSafeQueue<std::string> lidar_status_queue;
 
 // ENHANCED PLC THREAD WITH PROPER ERROR HANDLING
@@ -99,7 +182,7 @@ void plc_thread_func(
 #endif
 
     // Create MC Protocol client instance
-    MCProtocol plc("192.168.3.5", 5000);
+    MCProtocol plc(PLC_IP, PLC_PORT);
     
     // Try to establish connection to PLC
     bool connection_established = false;
@@ -171,31 +254,9 @@ void plc_thread_func(
             if (connection_established && plc.isConnected()) {
                 // Real PLC communication
                 try {
-                    if (command.find("READ_D") != std::string::npos) {
-                        // Example: READ_D100 -> read D register 100
-                        size_t pos = command.find("READ_D");
-                        if (pos != std::string::npos) {
-                            std::string addr_str = command.substr(pos + 6);
-                            uint32_t addr = std::stoul(addr_str);
-                            uint16_t value = plc.readSingleWord("D", addr);
-                            plc_response = "D" + addr_str + " = " + std::to_string(value);
-                        }
-                    } else if (command.find("WRITE_D") != std::string::npos) {
-                        // Example: WRITE_D100_1234 -> write 1234 to D100
-                        size_t pos1 = command.find("WRITE_D");
-                        size_t pos2 = command.find("_", pos1 + 7);
-                        if (pos1 != std::string::npos && pos2 != std::string::npos) {
-                            std::string addr_str = command.substr(pos1 + 7, pos2 - pos1 - 7);
-                            std::string value_str = command.substr(pos2 + 1);
-                            uint32_t addr = std::stoul(addr_str);
-                            uint16_t value = std::stoul(value_str);
-                            bool success = plc.writeSingleWord("D", addr, value);
-                            plc_response = success ? "Write D" + addr_str + " = " + value_str + " OK" 
-                                                  : "Write D" + addr_str + " FAILED";
-                        }
-                    } else {
-                        plc_response = "Unknown command: " + command;
-                    }
+                    // Sử dụng hàm tái cấu trúc để xử lý lệnh
+                    plc_response = parseAndExecutePlcCommand(command, plc);
+
                 } catch (const std::exception& e) {
                     plc_response = "PLC Error: " + std::string(e.what());
 #ifdef ENABLE_LOG
@@ -227,234 +288,185 @@ void plc_thread_func(
 }
 
 // LIDAR THREAD WITH SLAM PROCESSING
-void lidar_thread_func(SystemState& state) {
+void lidar_thread_func(
+    SystemState& state,
+    ThreadSafeQueue<std::vector<Point2D>>& points_queue, 
+    ThreadSafeQueue<std::string>& plc_command_queue)
+{
 #ifdef ENABLE_LOG
-    LOG_INFO << "[LiDAR Thread] Starting SLAM LiDAR processing...";
+    LOG_INFO << "[LiDAR Thread] Starting...";
 #else
-    std::cout << "[LiDAR Thread] Starting SLAM LiDAR processing..." << std::endl;
+    std::cout << "[LiDAR Thread] Starting..." << std::endl;
 #endif
 
-    // Initialize LiDAR processor
-    LidarProcessor lidar_processor("192.168.3.10", "2368", "192.168.3.101", "2368");
-    
-    if (!lidar_processor.initialize()) {
-        std::cerr << "[LiDAR Thread] Failed to initialize LiDAR processor!" << std::endl;
+    // Khởi tạo LidarProcessor với các IP/Port mặc định
+    std::string lidar_host_ip = LIDAR_HOST_IP;
+    std::string lidar_port = std::to_string(LIDAR_PORT);
+    std::string lidar_client_ip = LIDAR_CLIENT_IP; 
+    std::string lidar_client_port = std::to_string(LIDAR_PORT);
+
+    auto lidar_processor = std::unique_ptr<LidarProcessor>(new LidarProcessor(lidar_host_ip, lidar_port, lidar_client_ip, lidar_client_port));
+
+    // Bước 1: Khởi tạo kết nối với LiDAR
+    if (!lidar_processor->initialize()) {
+#ifdef ENABLE_LOG
+        LOG_ERROR << "[LiDAR Thread] Failed to initialize LidarProcessor.";
+#else
+        std::cerr << "[LiDAR Thread] Failed to initialize LidarProcessor." << std::endl;
+#endif
         {
             std::lock_guard<std::mutex> lock(state.state_mutex);
             state.lidar_connected = false;
-            state.last_lidar_data = "LiDAR initialization failed";
+            state.last_lidar_data = "Lidar initialization failed";
+        }
+        return; // Kết thúc luồng nếu không thể khởi tạo
+    }
+
+    // Bước 2: Bắt đầu luồng xử lý dữ liệu ngầm của thư viện LiDAR
+    if (!lidar_processor->start()) {
+#ifdef ENABLE_LOG
+        LOG_ERROR << "[LiDAR Thread] Failed to start LidarProcessor.";
+#else
+        std::cerr << "[LiDAR Thread] Failed to start LidarProcessor." << std::endl;
+#endif
+         {
+            std::lock_guard<std::mutex> lock(state.state_mutex);
+            state.lidar_connected = false;
+            state.last_lidar_data = "Lidar start failed";
         }
         return;
     }
 
-    // Set up callbacks for hull and map updates
-    lidar_processor.set_hull_callback([&state](const std::vector<Point2D>& hull, const RobotPose& pose) {
-        // Update system state with new stable hull
-        {
-            std::lock_guard<std::mutex> lock(state.state_mutex);
-            state.latest_convex_hull = hull;
-            state.current_robot_pose = pose;
-            state.total_stable_hulls++;
-            state.last_hull_timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count();
-        }
-        
-        // Send hull data to queue for other threads
-        convex_hull_queue.push(hull);
-        pose_queue.push(pose);
-        
-#ifdef ENABLE_LOG
-        LOG_INFO << "[LiDAR Thread] New stable hull with " << hull.size() << " points";
-#else
-        std::cout << "[LiDAR Thread] New stable hull with " << hull.size() << " points at pose (" 
-                  << std::fixed << std::setprecision(2) << pose.x << ", " << pose.y << ")" << std::endl;
-#endif
-    });
-
-    lidar_processor.set_map_callback([&state](const std::vector<std::vector<Point2D>>& map_hulls) {
-        // Update global map
-        {
-            std::lock_guard<std::mutex> lock(state.state_mutex);
-            state.global_map_hulls = map_hulls;
-        }
-        
-#ifdef ENABLE_LOG
-        LOG_INFO << "[LiDAR Thread] Map updated with " << map_hulls.size() << " hull regions";
-#else
-        std::cout << "[LiDAR Thread] Map updated with " << map_hulls.size() << " hull regions" << std::endl;
-#endif
-    });
-
-    // Start processing
-    if (!lidar_processor.start_processing()) {
-        std::cerr << "[LiDAR Thread] Failed to start LiDAR processing!" << std::endl;
-        return;
-    }
-
+    // Cập nhật trạng thái thành công
     {
         std::lock_guard<std::mutex> lock(state.state_mutex);
         state.lidar_connected = true;
-        state.last_lidar_data = "LiDAR SLAM processing active";
+        state.last_lidar_data = "Lidar connected and running";
     }
 
-    // Status update timer
-    auto last_status_time = std::chrono::steady_clock::now();
-    const auto status_interval = std::chrono::seconds(5);
 
-    // Main processing loop
-    std::thread lidar_processing_thread([&lidar_processor]() {
-        lidar_processor.process_slam_lidar_data();
-    });
-
-    // Status monitoring loop
-    while (global_running && lidar_processor.is_slam_active()) {
-        auto current_time = std::chrono::steady_clock::now();
-        
-        // Update status periodically
-        if (current_time - last_status_time >= status_interval) {
-            {
-                std::lock_guard<std::mutex> lock(state.state_mutex);
-                state.total_scan_count = lidar_processor.get_scan_count();
-                state.current_robot_pose = lidar_processor.get_current_pose();
-                
-                std::string status = "Scans: " + std::to_string(state.total_scan_count) + 
-                                   ", Stable hulls: " + std::to_string(state.total_stable_hulls) +
-                                   ", Pose: (" + std::to_string(state.current_robot_pose.x) + 
-                                   ", " + std::to_string(state.current_robot_pose.y) + ")";
-                state.last_lidar_data = status;
-            }
-            
-            // Send status update
-            lidar_status_queue.push("STATUS_UPDATE");
-            last_status_time = current_time;
-        }
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    // Clean shutdown
-    lidar_processor.stop_processing();
-    
-    if (lidar_processing_thread.joinable()) {
-        lidar_processing_thread.join();
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(state.state_mutex);
-        state.lidar_connected = false;
-        state.last_lidar_data = "LiDAR processing stopped";
-    }
-
-#ifdef ENABLE_LOG
-    LOG_INFO << "[LiDAR Thread] Shutting down...";
-#else
-    std::cout << "[LiDAR Thread] Shutting down..." << std::endl;
-#endif
-}
-
-// DATA PROCESSING THREAD - Consumes convex hull data
-void data_processing_thread_func(SystemState& state) {
-#ifdef ENABLE_LOG
-    LOG_INFO << "[Data Processing Thread] Starting...";
-#else
-    std::cout << "[Data Processing Thread] Starting..." << std::endl;
-#endif
-
+    // Bước 3: Vòng lặp chính để xử lý dữ liệu
     while (global_running) {
-        std::vector<Point2D> hull_data;
-        RobotPose pose_data;
-        
-        // Wait for new convex hull data
-        if (convex_hull_queue.pop(hull_data, 1000)) { // 1 second timeout
-            // Try to get corresponding pose data
-            if (pose_queue.pop(pose_data, 100)) {
-#ifdef ENABLE_LOG
-                LOG_INFO << "[Data Processing] Processing hull with " << hull_data.size() << " points";
-#else
-                std::cout << "[Data Processing] Processing hull with " << hull_data.size() 
-                          << " points at pose (" << pose_data.x << ", " << pose_data.y << ")" << std::endl;
-#endif
+        // Lấy dữ liệu điểm đã được ổn định từ thư viện
+        std::vector<LidarPoint> stable_points = lidar_processor->getStablePoints();
 
-                // Example processing: Calculate hull area
-                if (hull_data.size() >= 3) {
-                    float area = 0.0f;
-                    for (size_t i = 0; i < hull_data.size(); i++) {
-                        size_t j = (i + 1) % hull_data.size();
-                        area += hull_data[i].x * hull_data[j].y - hull_data[j].x * hull_data[i].y;
-                    }
-                    area = std::abs(area) / 2.0f;
-                    
-                    std::cout << "[Data Processing] Hull area: " << std::fixed << std::setprecision(3) 
-                              << area << " m²" << std::endl;
-                }
-
-                // Example: Send processed data to other systems
-                // You can add your custom processing logic here
-                
-                // Example: Detect if robot is in a specific region
-                bool in_target_region = (pose_data.x > 1.0 && pose_data.x < 5.0 && 
-                                       pose_data.y > 1.0 && pose_data.y < 5.0);
-                
-                if (in_target_region) {
-                    std::cout << "[Data Processing] Robot is in target region!" << std::endl;
-                    // Could trigger PLC command or other actions
-                }
-            }
+        if (stable_points.empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue; // Bỏ qua nếu chưa có dữ liệu
         }
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
 
-#ifdef ENABLE_LOG
-    LOG_INFO << "[Data Processing Thread] Shutting down...";
-#else
-    std::cout << "[Data Processing Thread] Shutting down..." << std::endl;
-#endif
-}
+        // --- Cập nhật trạng thái hệ thống ---
+        std::vector<Point2D> current_points_2d;
+        current_points_2d.reserve(stable_points.size());
+        for(const auto& p : stable_points) {
+            current_points_2d.push_back({p.x, p.y});
+        }
 
-// MONITORING THREAD - Displays system status
-void monitoring_thread_func(SystemState& state) {
-#ifdef ENABLE_LOG
-    LOG_INFO << "[Monitoring Thread] Starting...";
-#else
-    std::cout << "[Monitoring Thread] Starting..." << std::endl;
-#endif
+        {
+            std::lock_guard<std::mutex> lock(state.state_mutex);
+            state.last_lidar_data = "Received " + std::to_string(stable_points.size()) + " stable points.";
+            state.latest_convex_hull = current_points_2d; // Sử dụng lại trường này để lưu các điểm
+        }
 
-    auto last_display_time = std::chrono::steady_clock::now();
-    const auto display_interval = std::chrono::seconds(10);
+        // Gửi dữ liệu điểm sang các luồng khác nếu cần
+        points_queue.push(current_points_2d);
+        std::cout<<"[LiDAR Thread] Pushed " << current_points_2d.size() << " points to queue." << std::endl;
+        std::cout<<current_points_2d.data()<<std::endl;
 
-    while (global_running) {
-        auto current_time = std::chrono::steady_clock::now();
-        
-        if (current_time - last_display_time >= display_interval) {
-            std::cout << "\n========== SYSTEM STATUS ===========" << std::endl;
+        // --- Phân tích vật cản phía trước ---
+        float min_distance_in_front = 100.0f; // Khởi tạo khoảng cách lớn
+        bool obstacle_found = false;
+
+        // Khởi tạo khoảng cách tối thiểu cho từng hướng
+        float min_front_left = 999.0;   // 270°-315°
+        float min_front_right = 999.0;  // 45°-90°
+        float min_left = 999.0;         // 225°-270°
+        float min_right = 999.0;        // 90°-135°
+        float min_front = 999.0;         // 135°-225°
+        float min_front_distance = 0;
+        int count_front_left = 0, count_front_right = 0;
+        int count_left = 0, count_right = 0, count_back = 0;
             
-            {
-                std::lock_guard<std::mutex> lock(state.state_mutex);
-                std::cout << "PLC Status: " << (state.plc_connected ? "CONNECTED" : "DISCONNECTED") << std::endl;
-                std::cout << "LiDAR Status: " << (state.lidar_connected ? "CONNECTED" : "DISCONNECTED") << std::endl;
-                std::cout << "Total Scans: " << state.total_scan_count << std::endl;
-                std::cout << "Stable Hulls: " << state.total_stable_hulls << std::endl;
-                std::cout << "Current Hull Points: " << state.latest_convex_hull.size() << std::endl;
-                std::cout << "Robot Pose: (" << std::fixed << std::setprecision(2) 
-                          << state.current_robot_pose.x << ", " 
-                          << state.current_robot_pose.y << ", " 
-                          << state.current_robot_pose.theta << ")" << std::endl;
-                std::cout << "Queue Sizes - Hull: " << convex_hull_queue.size() 
-                          << ", Pose: " << pose_queue.size() << std::endl;
+        for (const auto& point : stable_points) {
+            float angle = point.angle * 180.0f / M_PI; // Radian sang độ
+
+             if (angle >= 270.0 && angle <= 315.0) {
+                        // Trái
+                min_left = std::min(min_left, point.distance);
+                count_left++;
+            }
+            else if (angle >= 45.0 && angle <= 90.0) {
+                           // Phải
+                min_right = std::min(min_right, point.distance);
+                count_right++;
+            }
+            else if (angle >= 225.0 && angle < 270.0) {
+
+
+                // Phía trước-trái
+                min_front_left = std::min(min_front_left, point.distance);
+                count_front_left++;
+            }
+            else if (angle > 90.0 && angle <= 135.0) {
+                            // Phía trước-phải
+                min_front_right = std::min(min_front_right, point.distance);
+                count_front_right++;
+            }
+            else if (angle > 135.0 && angle < 225.0) {
+
+                // Phía trước
+                min_front = std::min(min_front, point.distance);
+                count_back++;
             }
             
-            std::cout << "==================================\n" << std::endl;
-            last_display_time = current_time;
         }
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+
+            // Hiển thị kết quả
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << "=== PHÁT HIỆN VẬT CẢN ===" << std::endl;
+    // std::cout << "Tổng điểm: " << points.size() << std::endl;
+    std::cout << "Trước-Trái (270°-315°): " << min_front_left << "m (" << count_front_left << " điểm)" << std::endl;
+    std::cout << "Trước-Phải (45°-90°):   " << min_front_right << "m (" << count_front_right << " điểm)" << std::endl;
+    std::cout << "Trái (225°-270°):       " << min_left << "m (" << count_left << " điểm)" << std::endl;
+    std::cout << "Phải (90°-135°):        " << min_right << "m (" << count_right << " điểm)" << std::endl;
+    std::cout << "Sau (135°-225°):        " << min_front << "m (" << count_back << " điểm)" << std::endl;
+
+        if (min_front < 1.0) {
+            std::cout << "*** CẢNH BÁO: Vật cản gần phía trước (" << min_front << "m) ***" << std::endl;
+        }
+        // --- Ra quyết định và gửi lệnh cho PLC ---
+        // Chuyển đổi khoảng cách từ mét sang centimet
+        float min_dist_cm = min_front * 100.0f;
+
+        // Nếu không có vật cản hoặc vật cản ở xa hơn 50cm
+        if ( min_dist_cm > 50.0f) {
+            // Gửi lệnh GHI giá trị 1 vào thanh ghi D100
+           // plc_command_queue.push("WRITE_D_100_1"); //comment for test
+           std::cout << "[LiDAR Thread] Path is clear (dist > 50cm). Sending command WRITE_D_100_1" << std::endl;
+#ifdef ENABLE_LOG
+            LOG_INFO << "[LiDAR Thread] Path is clear (dist > 50cm). Sending command WRITE_D_100_1";
+#endif
+        } else {
+            // Ngược lại, có vật cản trong phạm vi 50cm
+            // Gửi lệnh GHI giá trị 0 vào thanh ghi D100
+           // plc_command_queue.push("WRITE_D_100_0");
+           std::cout << "[LiDAR Thread] Obstacle detected at " << min_dist_cm << " cm. Sending command WRITE_D100_0" << std::endl;
+#ifdef ENABLE_LOG
+            LOG_WARNING << "[LiDAR Thread] Obstacle detected at " << min_dist_cm << " cm. Sending command WRITE_D100_0";
+#endif
+        }
+
+        // Chờ một khoảng thời gian ngắn để giảm tải CPU
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 
+    // Dừng xử lý LiDAR trước khi kết thúc luồng
+    lidar_processor->stop();
 #ifdef ENABLE_LOG
-    LOG_INFO << "[Monitoring Thread] Shutting down...";
+    LOG_INFO << "[LiDAR Thread] Stopped.";
 #else
-    std::cout << "[Monitoring Thread] Shutting down..." << std::endl;
+    std::cout << "[LiDAR Thread] Stopped." << std::endl;
 #endif
 }
 
@@ -499,60 +511,67 @@ int main() {
     ThreadSafeQueue<std::string> plc_result_queue;
 
     // Start all threads
-    std::thread plc_thread(plc_thread_func, std::ref(shared_state), 
-                          std::ref(plc_command_queue), std::ref(plc_result_queue));
-    
-    std::thread lidar_thread(lidar_thread_func, std::ref(shared_state));
-    
-    std::thread data_processing_thread(data_processing_thread_func, std::ref(shared_state));
-    
-    std::thread monitoring_thread(monitoring_thread_func, std::ref(shared_state));
+    // std::thread plc_thread(plc_thread_func, std::ref(shared_state), 
+    //                       std::ref(plc_command_queue), std::ref(plc_result_queue));
+    // KHỞI CHẠY LUỒNG LIDAR
+    std::thread lidar_thread(lidar_thread_func, std::ref(shared_state),
+                           std::ref(convex_hull_queue), std::ref(plc_command_queue));
 
-    // Test commands
-    std::vector<std::string> test_commands = {
-        "READ_D100",
-        "READ_D101",
-        "WRITE_D100_1234",
-        "READ_D100",
-        "WRITE_D101_5678",
-        "READ_D101",
-        "INVALID_COMMAND"
-    };
-
-    int command_index = 0;
-    int total_commands = test_commands.size();
-    auto last_command_time = std::chrono::steady_clock::now();
-    const auto command_interval = std::chrono::seconds(5);
-
+    // Vòng lặp chính của main thread có thể để trống hoặc làm nhiệm vụ giám sát
     while (global_running) {
-        auto current_time = std::chrono::steady_clock::now();
-        
-        // Send test commands periodically
-        if (current_time - last_command_time >= command_interval) {
-            std::string command = test_commands[command_index % total_commands];
-            std::cout << "\n[Main Thread] Sending PLC command: " << command << std::endl;
-            plc_command_queue.push(command);
-
-            // Wait for response
-            std::string result;
-            if (plc_result_queue.pop(result, 3000)) { // 3 second timeout
-                std::cout << "[Main Thread] PLC Response: " << result << std::endl;
-            } else {
-                std::cout << "[Main Thread] Timeout waiting for PLC response!" << std::endl;
-            }
-
-            command_index++;
-            last_command_time = current_time;
+        // Có thể in ra trạng thái hệ thống ở đây để theo dõi
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        {
+            std::lock_guard<std::mutex> lock(shared_state.state_mutex);
+            std::cout << "\n--- SYSTEM STATUS ---" << std::endl;
+            std::cout << "PLC Connected: " << (shared_state.plc_connected ? "Yes" : "No") << std::endl;
+            std::cout << "LiDAR Connected: " << (shared_state.lidar_connected ? "Yes" : "No") << std::endl;
+            std::cout << "Last LiDAR Data: " << shared_state.last_lidar_data << std::endl;
+            std::cout << "---------------------\n" << std::endl;
         }
-        
-        // Check for status updates from LiDAR
-        std::string lidar_status;
-        while (lidar_status_queue.pop(lidar_status, 10)) { // Non-blocking check
-            std::cout << "[Main Thread] LiDAR Status Update: " << lidar_status << std::endl;
-        }
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        // Có thể thêm điều kiện để dừng chương trình, ví dụ: nhấn phím
     }
+
+    
+    // // Test commands
+    // std::vector<std::string> test_commands = {
+    //     "READ_D100",
+    //     "READ_D101",
+    //     "WRITE_D100_1234",
+    //     "READ_D100",
+    //     "WRITE_D101_5678",
+    //     "READ_D101",
+    //     "INVALID_COMMAND"
+    // };
+
+    // int command_index = 0;
+    // int total_commands = test_commands.size();
+    // auto last_command_time = std::chrono::steady_clock::now();
+    // const auto command_interval = std::chrono::seconds(5);
+
+    // while (global_running) {
+    //     auto current_time = std::chrono::steady_clock::now();
+        
+    //     // Send test commands periodically
+    //     if (current_time - last_command_time >= command_interval) {
+    //         std::string command = test_commands[command_index % total_commands];
+    //         std::cout << "\n[Main Thread] Sending PLC command: " << command << std::endl;
+    //         plc_command_queue.push(command);
+
+    //         // Wait for response
+    //         std::string result;
+    //         if (plc_result_queue.pop(result, 3000)) { // 3 second timeout
+    //             std::cout << "[Main Thread] PLC Response: " << result << std::endl;
+    //         } else {
+    //             std::cout << "[Main Thread] Timeout waiting for PLC response!" << std::endl;
+    //         }
+
+    //         command_index++;
+    //         last_command_time = current_time;
+    //     }
+    //     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // }
 
     std::cout << "\n[Main Thread] Initiating shutdown..." << std::endl;
     
@@ -560,24 +579,14 @@ int main() {
     global_running = false;
     
     // Join all threads
-    if (plc_thread.joinable()) {
-        plc_thread.join();
-        std::cout << "[Main Thread] PLC thread stopped." << std::endl;
-    }
-    
+    // if (plc_thread.joinable()) {
+    //     plc_thread.join();
+    //     std::cout << "[Main Thread] PLC thread stopped." << std::endl;
+    // }
+
     if (lidar_thread.joinable()) {
         lidar_thread.join();
         std::cout << "[Main Thread] LiDAR thread stopped." << std::endl;
-    }
-    
-    if (data_processing_thread.joinable()) {
-        data_processing_thread.join();
-        std::cout << "[Main Thread] Data processing thread stopped." << std::endl;
-    }
-    
-    if (monitoring_thread.joinable()) {
-        monitoring_thread.join();
-        std::cout << "[Main Thread] Monitoring thread stopped." << std::endl;
     }
 
     std::cout << "[Main Thread] System shutdown complete." << std::endl;

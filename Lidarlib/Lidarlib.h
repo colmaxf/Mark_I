@@ -5,218 +5,280 @@
 #include <vector>
 #include <deque>
 #include <mutex>
-#include <cmath>
 #include <atomic>
 #include <functional>
+#include <chrono>
+#include <thread>
+#include <memory>
 
-// Cấu trúc điểm 2D
-struct Point2D {
-    float x, y;
-    float distance;
+#include "./config.h"
+#ifdef ENABLE_LOG
+#include "./logger/Logger.h"
+#endif
+
+// Cấu trúc điểm 2D với timestamp
+struct LidarPoint {
+    float x, y;              // Tọa độ Cartesian (meters)
+    float distance;          // Khoảng cách (meters)
+    float angle;             // Góc (radians)
+    uint16_t intensity;      // Cường độ tín hiệu
+    long timestamp;          // Timestamp (milliseconds)
     
-    Point2D(float x = 0, float y = 0, float dist = 0) : x(x), y(y), distance(dist) {}
+    LidarPoint(float x = 0, float y = 0, float dist = 0, float ang = 0, 
+               uint16_t intens = 0, long ts = 0)
+        : x(x), y(y), distance(dist), angle(ang), intensity(intens), timestamp(ts) {}
     
-    bool operator<(const Point2D& other) const {
-        if (x != other.x) return x < other.x;
-        return y < other.y;
-    }
-    
-    bool operator==(const Point2D& other) const {
-        return abs(x - other.x) < 1e-6 && abs(y - other.y) < 1e-6;
+    bool isValid() const {
+        return distance > 0.01f && distance < 100.0f; // 1cm to 100m range
     }
 };
 
-// Pose của robot (vị trí và hướng)
-struct RobotPose {
-    float x, y, theta;  // x, y (meters), theta (radians)
+// Cấu trúc để lưu trữ một scan hoàn chỉnh
+struct LidarScan {
+    std::vector<LidarPoint> points;
     long timestamp;
+    int scan_id;
     
-    RobotPose(float x = 0, float y = 0, float theta = 0, long ts = 0)
-        : x(x), y(y), theta(theta), timestamp(ts) {}
+    LidarScan(long ts = 0, int id = 0) : timestamp(ts), scan_id(id) {}
+    
+    size_t size() const { return points.size(); }
+    bool empty() const { return points.empty(); }
 };
 
-// Node trong pose graph
-struct PoseGraphNode {
-    RobotPose pose;
-    std::vector<Point2D> scan_points;
-    std::vector<Point2D> convex_hull;
-    int node_id;
-    
-    PoseGraphNode(const RobotPose& p, const std::vector<Point2D>& points, int id)
-        : pose(p), scan_points(points), node_id(id) {}
-};
-
-// Đơn giản hóa SLAM algorithm
-class SimpleSLAM {
+// Bộ lọc nhiễu cho dữ liệu LiDAR
+class NoiseFilter {
 private:
-    std::vector<std::shared_ptr<PoseGraphNode>> pose_graph;
-    RobotPose current_pose;
-    RobotPose last_pose;
-    
-    // SLAM parameters
-    float max_correspondence_distance;
-    float loop_closure_threshold;
-    int next_node_id;
-    
-    mutable std::mutex slam_mutex;
+    float min_distance, max_distance;
+    float max_angle_jump;
+    int min_neighbors;
     
 public:
-    SimpleSLAM(float max_corr_dist = 2.0f, float loop_threshold = 1.0f);
+    NoiseFilter(float min_dist = 0.05f, float max_dist = 50.0f, 
+                float max_jump = 0.5f, int min_neigh = 2)
+        : min_distance(min_dist), max_distance(max_dist), 
+          max_angle_jump(max_jump), min_neighbors(min_neigh) {}
     
-    // Thêm scan mới và cập nhật pose
-    bool add_scan(const std::vector<Point2D>& scan_points, RobotPose& estimated_pose);
-    
-    // Scan matching để estimate pose
-    RobotPose estimate_pose_from_scan(const std::vector<Point2D>& current_scan);
-    
-    // Tìm loop closure
-    int find_loop_closure(const RobotPose& current_pose);
-    
-    // Transform điểm từ local frame sang global frame
-    std::vector<Point2D> transform_points_to_global(const std::vector<Point2D>& local_points, 
-                                                   const RobotPose& robot_pose);
-    
-    // Lấy tất cả convex hull đã mapped
-    std::vector<std::vector<Point2D>> get_all_global_hulls() const;
-    
-    // Lấy pose hiện tại
-    RobotPose get_current_pose() const;
-    
-    // Lấy pose graph
-    std::vector<std::shared_ptr<PoseGraphNode>> get_pose_graph() const;
+    std::vector<LidarPoint> filter(const std::vector<LidarPoint>& raw_points);
     
 private:
-    // ICP (Iterative Closest Point) đơn giản
-    RobotPose simple_icp(const std::vector<Point2D>& source, 
-                        const std::vector<Point2D>& target);
-    
-    // Tính distance giữa hai pose
-    float pose_distance(const RobotPose& p1, const RobotPose& p2);
-    
-    // Transform một điểm
-    Point2D transform_point(const Point2D& point, const RobotPose& pose);
+    bool isPointValid(const LidarPoint& point, 
+                     const std::vector<LidarPoint>& neighbors) const;
+    std::vector<LidarPoint> removeOutliers(const std::vector<LidarPoint>& points) const;
+    std::vector<LidarPoint> smoothAngularJumps(const std::vector<LidarPoint>& points) const;
 };
 
-// Class quản lý convex hull với SLAM
-class SlamConvexHullManager {
+// Bộ đệm dữ liệu LiDAR với khả năng đồng bộ
+class LidarBuffer {
 private:
-    std::deque<std::vector<Point2D>> hull_history;
-    std::vector<Point2D> stable_hull;
-    std::vector<Point2D> global_hull;  // Hull trong global coordinate
+    std::deque<LidarScan> scan_buffer;
+    size_t max_buffer_size;
+    mutable std::mutex buffer_mutex;
+    std::atomic<int> next_scan_id;
     
-    int max_history_size;
+public:
+    LidarBuffer(size_t max_size = 100) 
+        : max_buffer_size(max_size), next_scan_id(0) {}
+    
+    void addScan(const LidarScan& scan);
+    LidarScan getLatestScan() const;
+    std::vector<LidarScan> getRecentScans(int count) const;
+    size_t size() const;
+    void clear();
+    
+    // Lấy scan theo timestamp
+    LidarScan getScanByTimestamp(long timestamp) const;
+    std::vector<LidarScan> getScansInTimeRange(long start_time, long end_time) const;
+};
+
+// Bộ ổn định hóa dữ liệu realtime
+class RealtimeStabilizer {
+private:
+    std::deque<std::vector<LidarPoint>> point_history;
+    std::vector<LidarPoint> stable_points;
+    
+    int history_window;
     float stability_threshold;
+    float outlier_threshold;
     bool is_stable;
-    int stable_count;
-    mutable std::mutex hull_mutex;
+    int stable_frame_count;
+    
+    mutable std::mutex stabilizer_mutex;
     
 public:
-    SlamConvexHullManager(int history_size = 10, float threshold = 0.1);
+    RealtimeStabilizer(int window = 5, float stab_thresh = 0.02f, float outlier_thresh = 0.1f)
+        : history_window(window), stability_threshold(stab_thresh), 
+          outlier_threshold(outlier_thresh), is_stable(false), stable_frame_count(0) {}
     
-    // Cập nhật với pose thông tin
-    bool update(const std::vector<Point2D>& new_hull, const RobotPose& robot_pose);
-    
-    // Lấy hull trong local coordinate
-    std::vector<Point2D> get_stable_hull() const;
-    
-    // Lấy hull trong global coordinate
-    std::vector<Point2D> get_global_hull() const;
-    
-    bool is_hull_stable() const;
+    bool update(const std::vector<LidarPoint>& new_points);
+    std::vector<LidarPoint> getStablePoints() const;
+    bool isDataStable() const;
+    float getStabilityScore() const;
     
 private:
-    std::vector<Point2D> compute_average_hull();
-    bool is_hull_stable_internal(const std::vector<Point2D>& new_hull);
-    std::vector<Point2D> compute_convex_hull(std::vector<Point2D> points);
-    float cross_product(const Point2D& O, const Point2D& A, const Point2D& B);
-    
-    // Transform hull sang global coordinate
-    std::vector<Point2D> transform_hull_to_global(const std::vector<Point2D>& local_hull, 
-                                                 const RobotPose& robot_pose);
+    std::vector<LidarPoint> computeStabilizedPoints();
+    bool checkStability(const std::vector<LidarPoint>& new_points);
+    std::vector<LidarPoint> removeTemporalOutliers(const std::vector<LidarPoint>& points);
 };
 
 // Class chính xử lý LiDAR
 class LidarProcessor {
 private:
+     // Hardware connection
     std::unique_ptr<LakiBeamUDP> lidar;
-    std::unique_ptr<SlamConvexHullManager> hull_manager;
-    std::unique_ptr<SimpleSLAM> slam_system;
-    
-    // Cấu hình LiDAR
     std::string local_ip, local_port, laser_ip, laser_port;
     
-    // Thread control
+    // Data processing components
+    std::unique_ptr<NoiseFilter> noise_filter;
+    std::unique_ptr<LidarBuffer> data_buffer;
+    std::unique_ptr<RealtimeStabilizer> stabilizer;
+    
+    // Threading
     std::atomic<bool> is_running;
     std::atomic<bool> is_processing;
+    std::unique_ptr<std::thread> processing_thread;
+    
+    // Statistics
+    std::atomic<long> total_scans;
+    std::atomic<long> valid_scans;
+    std::atomic<long> stable_scans;
+    std::atomic<float> average_points_per_scan;
+    std::atomic<float> processing_rate; // Hz
+    
+    // Timing
+    std::chrono::high_resolution_clock::time_point last_process_time;
+    std::chrono::high_resolution_clock::time_point start_time;
     
     // Callbacks
-    std::function<void(const std::vector<Point2D>&, const RobotPose&)> hull_callback;
-    std::function<void(const std::vector<std::vector<Point2D>>&)> map_callback;
+    std::function<void(const std::vector<LidarPoint>&)> realtime_callback;
+    std::function<void(const LidarScan&)> scan_callback;
+    std::function<void(const std::vector<LidarPoint>&)> stable_points_callback;
     
-    // Thống kê
-    std::atomic<int> scan_count;
-    std::atomic<int> valid_hulls_count;
-    std::atomic<int> loop_closures_count;
-    
-    // Pose tracking
-    RobotPose current_robot_pose;
-    mutable std::mutex pose_mutex;  
+    mutable std::mutex callback_mutex;
     
 public:
     LidarProcessor(const std::string& local_ip = "192.168.3.10",
-                       const std::string& local_port = "2368",
-                       const std::string& laser_ip = "192.168.3.101",
-                       const std::string& laser_port = "2368");
+                    const std::string& local_port = "2368", 
+                    const std::string& laser_ip = "192.168.3.101",
+                    const std::string& laser_port = "2368");
     
     ~LidarProcessor();
     
-    // Khởi tạo hệ thống
+    // Initialization
     bool initialize();
+    bool start();
+    void stop();
     
-    // Bắt đầu/dừng xử lý
-    bool start_processing();
-    void stop_processing();
+    // Configuration
+    void setNoiseFilterParams(float min_dist, float max_dist, float max_jump, int min_neighbors);
+    void setStabilizerParams(int window, float stability_thresh, float outlier_thresh);
+    void setBufferSize(size_t max_size);
     
-    // Đăng ký callbacks
-    void set_hull_callback(std::function<void(const std::vector<Point2D>&, const RobotPose&)> callback);
-    void set_map_callback(std::function<void(const std::vector<std::vector<Point2D>>&)> callback);
+    // Callbacks registration
+    void setRealtimeCallback(std::function<void(const std::vector<LidarPoint>&)> callback);
+    void setScanCallback(std::function<void(const LidarScan&)> callback);
+    void setStablePointsCallback(std::function<void(const std::vector<LidarPoint>&)> callback);
     
-    // Lấy thông tin hiện tại
-    std::vector<Point2D> get_current_stable_hull() const;
-    std::vector<Point2D> get_global_hull() const;
-    RobotPose get_current_pose() const;
-    std::vector<std::vector<Point2D>> get_mapped_hulls() const;
+    // Data access
+    std::vector<LidarPoint> getCurrentPoints() const;
+    std::vector<LidarPoint> getStablePoints() const;
+    LidarScan getLatestScan() const;
+    std::vector<LidarScan> getRecentScans(int count = 10) const;
     
-    // Kiểm tra trạng thái
-    bool is_lidar_connected() const;
-    bool is_hull_stable() const;
-    bool is_slam_active() const;
+    // Status
+    bool isConnected() const;
+    bool isProcessing() const;
+    bool isDataStable() const;
+    float getStabilityScore() const;
     
-    // Thống kê
-    int get_scan_count() const { return scan_count.load(); }
-    int get_valid_hulls_count() const { return valid_hulls_count.load(); }
-    int get_loop_closures_count() const { return loop_closures_count.load(); }
+    // Statistics
+    long getTotalScans() const { return total_scans.load(); }
+    long getValidScans() const { return valid_scans.load(); }
+    long getStableScans() const { return stable_scans.load(); }
+    float getAveragePointsPerScan() const { return average_points_per_scan.load(); }
+    float getProcessingRate() const { return processing_rate.load(); }
+    float getDataValidityRatio() const;
+    float getUptime() const;
     
-    // Hàm xử lý chính (chạy trong thread)
-    void process_slam_lidar_data();
-    
-    // Manual pose correction (nếu có odometry từ robot)
-    void update_robot_pose(const RobotPose& new_pose);
+    // Control
+    void pauseProcessing();
+    void resumeProcessing();
+    void resetStatistics();
     
 private:
-    // Xử lý một scan với SLAM
-    void process_single_scan_with_slam(const repark_t& pack);
+    // Main processing loop
+    void processLidarData();
     
-    // Chuyển đổi dữ liệu LiDAR thành điểm 2D
-    std::vector<Point2D> convert_lidar_to_points(const repark_t& pack);
+    // Data conversion
+    std::vector<LidarPoint> convertRawDataToPoints(const repark_t& pack);
+    LidarScan createScanFromPoints(const std::vector<LidarPoint>& points);
     
-    // Utility functions
-    float angle_to_degrees(u16_t angle) const { return angle / 100.0f; }
-    float distance_to_meters(u16_t distance) const { return distance / 1000.0f; }
-    long get_current_timestamp() const;
+    // Utilities
+    long getCurrentTimestamp() const;
+    void updateProcessingRate();
+    void printStatus() const;
     
-    // Visualization helper
-    void print_slam_status() const;
+    // Data validation
+    bool validateScanData(const repark_t& pack) const;
+    std::vector<LidarPoint> preprocessPoints(const std::vector<LidarPoint>& raw_points);
+};
+
+// Utility functions
+namespace LidarUtils {
+    // Coordinate conversion
+    float angleToRadians(uint16_t angle_raw);
+    float distanceToMeters(uint16_t distance_raw);
+    
+    // Point operations
+    float calculateDistance(const LidarPoint& p1, const LidarPoint& p2);
+    float calculateAngleDifference(float angle1, float angle2);
+    
+    // Data analysis
+    std::vector<LidarPoint> findNearestNeighbors(const LidarPoint& point, 
+                                                const std::vector<LidarPoint>& points, 
+                                                int k = 5);
+    
+    // Performance monitoring
+    void printPointStatistics(const std::vector<LidarPoint>& points);
+    void exportPointsToCSV(const std::vector<LidarPoint>& points, const std::string& filename);
+    
+    // Coordinate system utilities
+    std::vector<LidarPoint> filterByDistance(const std::vector<LidarPoint>& points, 
+                                           float min_dist, float max_dist);
+    std::vector<LidarPoint> filterByAngle(const std::vector<LidarPoint>& points, 
+                                         float min_angle, float max_angle);
+    std::vector<LidarPoint> filterByIntensity(const std::vector<LidarPoint>& points, 
+                                             uint16_t min_intensity);
+}
+
+// Configuration structure
+struct LidarConfig {
+    // Network settings
+    std::string local_ip = "192.168.3.10";
+    std::string local_port = "2368";
+    std::string laser_ip = "192.168.3.101";  
+    std::string laser_port = "2368";
+    
+    // Processing settings
+    int buffer_size = 100;
+    int stabilizer_window = 5;
+    float stability_threshold = 0.02f;
+    float outlier_threshold = 0.1f;
+    
+    // Filter settings
+    float min_distance = 0.05f;   // 5cm
+    float max_distance = 50.0f;   // 50m
+    float max_angle_jump = 0.5f;  // radians
+    int min_neighbors = 2;
+    
+    // Performance settings
+    int max_processing_rate = 100; // Hz
+    bool enable_threading = true;
+    bool enable_realtime_callbacks = true;
+    
+    // Debug settings
+    bool verbose_logging = false;
+    bool export_debug_data = false;
+    std::string debug_output_path = "./lidar_debug/";
 };
 
 #endif // LIDAR_PROCESSOR_H

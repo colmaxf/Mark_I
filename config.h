@@ -1,4 +1,18 @@
 // config.h
 #pragma once
 
-#define ENABLE_LOG  // hoặc comment dòng này để tắt log
+// Cờ bật tắt ghi log
+#define ENABLE_LOG  
+
+//config ip, port PLC
+#define PLC_IP "192.168.3.5"
+#define PLC_PORT 5000
+
+//config ip, port Lidar
+#define LIDAR_HOST_IP "192.168.3.10"
+#define LIDAR_CLIENT_IP "192.168.3.101"
+#define LIDAR_PORT 2368
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif

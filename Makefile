@@ -1,22 +1,29 @@
 CXX = g++
-CXXFLAGS = -std=c++11 -Wall -Wextra -O2 -pthread
-INCLUDES = -I. -Ilogger -IMCprotocollib
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -pthread
+INCLUDES = -I. -Ilogger -IMCprotocollib -ILidarlib
+
+# Thêm các thư viện Boost cần thiết
+LIBS = -lboost_thread -lboost_system -lpthread
 
 # Source files
-SOURCES = main.cpp logger/Logger.cpp MCprotocollib/MCprotocol.cpp
+SOURCES = main.cpp \
+          logger/Logger.cpp \
+          MCprotocollib/MCprotocol.cpp \
+          Lidarlib/Lidarlib.cpp \
+          Lidarlib/Data_SDK/LakiBeamUDP.cpp
 
 # Object files
 OBJECTS = $(SOURCES:.cpp=.o)
 
 # Target executable
-TARGET = plc_test
+TARGET = control_system
 
 # Default rule
 all: $(TARGET)
 
-# Link the executable
+# Link the executable - THÊM $(LIBS) vào đây
 $(TARGET): $(OBJECTS)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LIBS)
 
 # Compile source files
 %.o: %.cpp
@@ -27,24 +34,9 @@ clean:
 	rm -f $(OBJECTS) $(TARGET)
 	rm -rf logs/
 
-# Create necessary directories
-dirs:
-	mkdir -p logger MCprotocollib logs
-
-# Debug build
-debug: CXXFLAGS += -DDEBUG -g
-debug: $(TARGET)
-
-# Install dependencies (if needed)
-install-deps:
-	# Add any dependency installation commands here
-
 # Run the program
 run: $(TARGET)
 	./$(TARGET)
 
-# Run with logging enabled
-run-log: $(TARGET)
-	./$(TARGET) 2>&1 | tee execution.log
 
-.PHONY: all clean dirs debug install-deps run run-log
+.PHONY: all clean run 

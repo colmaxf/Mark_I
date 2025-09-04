@@ -2,773 +2,759 @@
 #include <iostream>
 #include <algorithm>
 #include <iomanip>
+#include <fstream>
 #include <unistd.h>
-#include <chrono>
+#include <cmath>
+#include <numeric>
 
 using namespace std;
+using namespace chrono;
 
-// === SimpleSLAM Implementation ===
-
-/**
- * @brief Constructor cho lớp SimpleSLAM.
- * @param max_corr_dist Khoảng cách tối đa để xem xét hai điểm là tương ứng trong ICP.
- * @param loop_threshold Ngưỡng khoảng cách để phát hiện một vòng lặp (loop closure).
- */
-SimpleSLAM::SimpleSLAM(float max_corr_dist, float loop_threshold)
-    : max_correspondence_distance(max_corr_dist), loop_closure_threshold(loop_threshold),
-      next_node_id(0), current_pose(0, 0, 0, 0), last_pose(0, 0, 0, 0) {}
-
-/**
- * @brief Thêm một scan mới vào hệ thống SLAM, cập nhật pose và pose graph.
- * @param scan_points Vector các điểm 2D từ lần quét LiDAR mới nhất.
- * @param[out] estimated_pose Pose được ước tính của robot sau khi xử lý scan.
- * @return true nếu scan được thêm thành công.
- */
-bool SimpleSLAM::add_scan(const vector<Point2D>& scan_points, RobotPose& estimated_pose) {
-    lock_guard<mutex> lock(slam_mutex);
+// === NoiseFilter Implementation ===
+vector<LidarPoint> NoiseFilter::filter(const vector<LidarPoint>& raw_points) {
+    if (raw_points.empty()) return {};
     
-    // Lấy timestamp từ pose hiện tại hoặc scan
-    long timestamp = 0;
-    if (!pose_graph.empty()) timestamp = pose_graph.back()->pose.timestamp + 100; // Giả định 100ms mỗi scan
+    vector<LidarPoint> filtered_points;
+    filtered_points.reserve(raw_points.size());
+    
+    // Bước 1: Lọc theo khoảng cách và cường độ cơ bản
+    for (const auto& point : raw_points) {
+        if (point.distance >= min_distance && 
+            point.distance <= max_distance && 
+            point.intensity > 50) {
+            filtered_points.push_back(point);
+        }
+    }
+    
+    // Bước 2: Loại bỏ các điểm gây ra bước nhảy góc đột ngột
+    filtered_points = smoothAngularJumps(filtered_points);
+    
+    // Bước 3: Loại bỏ các điểm ngoại lai
+    filtered_points = removeOutliers(filtered_points);
+    
+    return filtered_points;
+}
 
-    if (pose_graph.empty()) {
-        // First scan - set initial pose
-        estimated_pose = RobotPose(0, 0, 0, timestamp);
-        current_pose = estimated_pose;
-    } else {
-        // Estimate pose using scan matching
-        estimated_pose = estimate_pose_from_scan(scan_points);
-        current_pose = estimated_pose;
+vector<LidarPoint> NoiseFilter::removeOutliers(const vector<LidarPoint>& points) const {
+    if (points.size() < 3) return points;
+    
+    vector<LidarPoint> cleaned_points;
+    cleaned_points.reserve(points.size());
+    
+    for (size_t i = 0; i < points.size(); i++) {
+        const auto& current = points[i];
+        vector<LidarPoint> neighbors;
         
-        // Check for loop closure
-        int loop_node = find_loop_closure(current_pose);
-        if (loop_node >= 0) {
-            cout << "[SLAM] 🔄 Loop closure detected with node " << loop_node << endl;
-            // Simplified: adjust current pose based on loop closure
-            auto& loop_pose = pose_graph[loop_node]->pose;
-            current_pose.x = (current_pose.x + loop_pose.x) / 2.0f;
-            current_pose.y = (current_pose.y + loop_pose.y) / 2.0f;
-            estimated_pose = current_pose;
-        }
-    }
-    
-    // Tạo node mới trong pose graph
-    auto new_node = make_shared<PoseGraphNode>(estimated_pose, scan_points, next_node_id++);
-    
-    // Tính convex hull cho node này
-    vector<Point2D> local_points = scan_points; // Tạo bản sao để tính toán
-    new_node->convex_hull = compute_convex_hull(local_points);
-    
-    pose_graph.push_back(new_node);
-    last_pose = current_pose;
-    
-    return true;
-}
-
-/**
- * @brief Ước tính pose của robot từ scan hiện tại dựa trên scan trước đó.
- * 
- * Sử dụng một mô hình chuyển động đơn giản kết hợp với ICP để tinh chỉnh vị trí.
- * @param current_scan Vector các điểm 2D của lần quét hiện tại.
- * @return Pose mới được ước tính của robot.
- */
-RobotPose SimpleSLAM::estimate_pose_from_scan(const vector<Point2D>& current_scan) {
-    if (pose_graph.empty()) {
-        return RobotPose(0, 0, 0, 0);
-    }
-    
-    // Simplified odometry model - assume small movement
-    float dx = 0.05f;  // 5cm forward per scan (example)
-    float dy = 0.0f;
-    float dtheta = 0.01f; // 0.01 radian rotation per scan
-    
-    // Simple motion model update
-    RobotPose new_pose;
-    new_pose.x = last_pose.x + dx * cos(last_pose.theta) - dy * sin(last_pose.theta);
-    new_pose.y = last_pose.y + dx * sin(last_pose.theta) + dy * cos(last_pose.theta);
-    new_pose.theta = last_pose.theta + dtheta;
-    //new_pose.timestamp = current_scan.empty() ? 0 : current_scan[0].timestamp;
-    
-    // Cập nhật timestamp
-    if (!pose_graph.empty()) new_pose.timestamp = pose_graph.back()->pose.timestamp + 100;
-    else new_pose.timestamp = 0;
-    
-    // Refined using simple ICP if we have previous scans
-    if (pose_graph.size() > 1) {
-        auto& last_scan = pose_graph.back()->scan_points;
-        RobotPose icp_correction = simple_icp(current_scan, last_scan);
-        
-        // Apply correction
-        new_pose.x += icp_correction.x * 0.3f; // Weight factor
-        new_pose.y += icp_correction.y * 0.3f;
-        new_pose.theta += icp_correction.theta * 0.3f;
-    }
-    
-    return new_pose;
-}
-
-/**
- * @brief Tìm kiếm các vòng lặp (loop closures) trong pose graph.
- * 
- * So sánh pose hiện tại với các pose cũ trong graph để tìm các vị trí đã ghé thăm lại.
- * @param current_pose Pose hiện tại của robot.
- * @return ID của node tạo thành vòng lặp, hoặc -1 nếu không tìm thấy.
- */
-int SimpleSLAM::find_loop_closure(const RobotPose& current_pose) {
-    // Bỏ qua các node gần đây để tránh phát hiện sai
-    if (pose_graph.size() < 10) return -1;
-
-    for (size_t i = 0; i < pose_graph.size() - 10; i++) {
-        if (pose_distance(current_pose, pose_graph[i]->pose) < loop_closure_threshold) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-/**
- * @brief Chuyển đổi một tập hợp các điểm từ hệ tọa độ cục bộ của robot sang hệ tọa độ toàn cục.
- * @param local_points Vector các điểm trong hệ tọa độ cục bộ.
- * @param robot_pose Pose của robot (vị trí và hướng) trong hệ tọa độ toàn cục.
- * @return Vector các điểm đã được chuyển đổi sang hệ tọa độ toàn cục.
- */
-vector<Point2D> SimpleSLAM::transform_points_to_global(const vector<Point2D>& local_points, 
-                                                      const RobotPose& robot_pose) {
-    vector<Point2D> global_points;
-    global_points.reserve(local_points.size());
-    
-    for (const auto& point : local_points) {
-        Point2D global_point = transform_point(point, robot_pose);
-        global_points.push_back(global_point);
-    }
-    
-    return global_points;
-}
-
-/**
- * @brief Lấy tất cả các convex hull trong pose graph và chuyển đổi chúng sang hệ tọa độ toàn cục.
- * @return Một vector chứa các convex hull, mỗi hull là một vector các điểm toàn cục.
- */
-vector<vector<Point2D>> SimpleSLAM::get_all_global_hulls() const {
-    lock_guard<mutex> lock(slam_mutex);
-    vector<vector<Point2D>> all_hulls;
-    
-    for (const auto& node : pose_graph) {
-        if (!node->convex_hull.empty()) {
-            vector<Point2D> global_hull = transform_points_to_global(node->convex_hull, node->pose);
-            all_hulls.push_back(global_hull);
-        }
-    }
-    
-    return all_hulls;
-}
-
-/**
- * @brief Lấy pose hiện tại được ước tính của robot.
- * @return Pose hiện tại của robot.
- */
-RobotPose SimpleSLAM::get_current_pose() const {
-    lock_guard<mutex> lock(slam_mutex);
-    return current_pose;
-}
-
-/**
- * @brief Lấy toàn bộ pose graph.
- * @return Một vector các con trỏ chia sẻ đến các node trong graph.
- */
-vector<shared_ptr<PoseGraphNode>> SimpleSLAM::get_pose_graph() const {
-    lock_guard<mutex> lock(slam_mutex);
-    return pose_graph;
-}
-
-/**
- * @brief (Private) Thực hiện thuật toán Iterative Closest Point (ICP) đơn giản.
- * 
- * Ước tính sự dịch chuyển (translation) giữa hai đám mây điểm (source và target).
- * @param source Đám mây điểm nguồn (scan hiện tại).
- * @param target Đám mây điểm mục tiêu (scan trước đó).
- * @return Một RobotPose chỉ chứa thông tin về sự dịch chuyển (x, y) được ước tính.
- */
-RobotPose SimpleSLAM::simple_icp(const vector<Point2D>& source, const vector<Point2D>& target) {
-    // Simplified ICP - just find average displacement
-    if (source.empty() || target.empty()) {
-        return RobotPose(0, 0, 0, 0);
-    }
-    
-    float sum_dx = 0, sum_dy = 0;
-    int matches = 0;
-    
-    for (const auto& src_point : source) {
-        //
-        float min_dist_sq = 1e12; // Use squared distance for efficiency
-        const Point2D* closest_target_ptr = nullptr;
-        //
-        for (const auto& tgt_point : target) {
-            float dx = src_point.x - tgt_point.x;
-            float dy = src_point.y - tgt_point.y;
-            float dist_sq = dx*dx + dy*dy;
-            
-            if (dist_sq < min_dist_sq) {
-                min_dist_sq = dist_sq;
-                closest_target_ptr = &tgt_point;
+        for (size_t j = 0; j < points.size(); j++) {
+            if (i == j) continue;
+            float angle_diff = abs(current.angle - points[j].angle);
+            if (angle_diff < 0.1f) { 
+                neighbors.push_back(points[j]);
             }
         }
         
-        if (closest_target_ptr && min_dist_sq < (max_correspondence_distance * max_correspondence_distance)) {
-            sum_dx += closest_target_ptr->x - src_point.x;
-            sum_dy += closest_target_ptr->y - src_point.y;
-            matches++;
+        if (isPointValid(current, neighbors)) {
+            cleaned_points.push_back(current);
         }
     }
     
-    if (matches > 5) { // Require a minimum number of matches
-        return RobotPose(sum_dx / matches, sum_dy / matches, 0, 0);
-    }
-    
-    return RobotPose(0, 0, 0, 0);
+    return cleaned_points;
 }
 
-/**
- * @brief (Private) Tính khoảng cách Euclide giữa hai pose (chỉ xét x, y).
- * @param p1 Pose thứ nhất.
- * @param p2 Pose thứ hai.
- * @return Khoảng cách giữa hai pose.
- */
-float SimpleSLAM::pose_distance(const RobotPose& p1, const RobotPose& p2) {
-    float dx = p1.x - p2.x;
-    float dy = p1.y - p2.y;
-    return sqrt(dx*dx + dy*dy);
-}
-
-/**
- * @brief (Private) Chuyển đổi một điểm từ hệ tọa độ cục bộ sang toàn cục.
- * @param point Điểm trong hệ tọa độ cục bộ.
- * @param pose Pose của robot trong hệ tọa độ toàn cục.
- * @return Điểm đã được chuyển đổi.
- */
-Point2D SimpleSLAM::transform_point(const Point2D& point, const RobotPose& pose) {
-    float cos_theta = cos(pose.theta);
-    float sin_theta = sin(pose.theta);
+vector<LidarPoint> NoiseFilter::smoothAngularJumps(const vector<LidarPoint>& points) const {
+    if (points.size() < 2) return points;
     
-    float global_x = pose.x + point.x * cos_theta - point.y * sin_theta;
-    float global_y = pose.y + point.x * sin_theta + point.y * cos_theta;
+    vector<LidarPoint> smoothed_points;
+    smoothed_points.reserve(points.size());
+    smoothed_points.push_back(points[0]);
     
-    return Point2D(global_x, global_y, point.distance);
-}
-
-/**
- * @brief (Private) Tính tích có hướng (cross product) của 3 điểm.
- * @param O Điểm gốc.
- * @param A Điểm thứ nhất.
- * @param B Điểm thứ hai.
- * @return > 0 cho rẽ trái, < 0 cho rẽ phải, = 0 nếu thẳng hàng.
- */
-float SimpleSLAM::cross_product(const Point2D& O, const Point2D& A, const Point2D& B) {
-    return (A.x - O.x) * (B.y - O.y) - (A.y - O.y) * (B.x - O.x);
-}
-
-/**
- * @brief (Private) Tính toán convex hull của một tập hợp các điểm bằng thuật toán Andrew's monotone chain.
- * @param points Một vector các điểm Point2D.
- * @return Convex hull dưới dạng một vector các điểm Point2D.
- */
-vector<Point2D> SimpleSLAM::compute_convex_hull(vector<Point2D> points) {
-    if (points.size() <= 1) return points;
-    
-    sort(points.begin(), points.end());
-    points.erase(unique(points.begin(), points.end()), points.end());
-    
-    if (points.size() <= 1) return points;
-    
-    vector<Point2D> hull;
-    
-    // Lower hull
-    for (const auto& p : points) {
-        while (hull.size() >= 2 && 
-               cross_product(hull[hull.size()-2], hull[hull.size()-1], p) <= 0) {
-            hull.pop_back();
+    for (size_t i = 1; i < points.size(); i++) {
+        float angle_diff = abs(points[i].angle - points[i-1].angle);
+        if (angle_diff < max_angle_jump) {
+            smoothed_points.push_back(points[i]);
         }
-        hull.push_back(p);
     }
     
-    // Upper hull
-    int lower_size = hull.size();
-    for (int i = points.size() - 2; i >= 0; i--) {
-        const auto& p = points[i];
-        while (hull.size() > lower_size && 
-               cross_product(hull[hull.size()-2], hull[hull.size()-1], p) <= 0) {
-            hull.pop_back();
-        }
-        hull.push_back(p);
-    }
-    
-    if (hull.size() > 1) hull.pop_back();
-    return hull;
+    return smoothed_points;
 }
 
-// === SlamConvexHullManager Implementation ===
-
-/**
- * @brief Constructor cho lớp SlamConvexHullManager.
- * @param history_size Số lượng hull tối đa để lưu trong lịch sử.
- * @param threshold Ngưỡng chênh lệch để xác định hull là ổn định.
- */
-SlamConvexHullManager::SlamConvexHullManager(int history_size, float threshold)
-    : max_history_size(history_size), stability_threshold(threshold), 
-      is_stable(false), stable_count(0) {}
-
-/**
- * @brief Cập nhật với một convex hull mới và pose của robot, kiểm tra tính ổn định.
- * @param new_hull Convex hull mới trong hệ tọa độ cục bộ.
- * @param robot_pose Pose hiện tại của robot.
- * @return true nếu hull vừa trở nên ổn định.
- */
-bool SlamConvexHullManager::update(const vector<Point2D>& new_hull, const RobotPose& robot_pose) {
-    lock_guard<mutex> lock(hull_mutex);
+bool NoiseFilter::isPointValid(const LidarPoint& point, 
+                              const vector<LidarPoint>& neighbors) const {
+    if (neighbors.size() < min_neighbors) return false;
     
-    hull_history.push_back(new_hull);
+    float avg_distance = 0;
+    for (const auto& neighbor : neighbors) {
+        float dx = point.x - neighbor.x;
+        float dy = point.y - neighbor.y;
+        avg_distance += sqrt(dx*dx + dy*dy);
+    }
+    avg_distance /= neighbors.size();
     
-    if (hull_history.size() > (size_t)max_history_size) {
-        hull_history.pop_front();
+    return avg_distance < 0.5f;
+}
+
+// === LidarBuffer Implementation ===
+void LidarBuffer::addScan(const LidarScan& scan) {
+    lock_guard<mutex> lock(buffer_mutex);
+    
+    LidarScan new_scan = scan;
+    new_scan.scan_id = next_scan_id++;
+    
+    scan_buffer.push_back(new_scan);
+    
+    if (scan_buffer.size() > max_buffer_size) {
+        scan_buffer.pop_front();
+    }
+}
+
+LidarScan LidarBuffer::getLatestScan() const {
+    lock_guard<mutex> lock(buffer_mutex);
+    if (scan_buffer.empty()) return LidarScan();
+    return scan_buffer.back();
+}
+
+vector<LidarScan> LidarBuffer::getRecentScans(int count) const {
+    lock_guard<mutex> lock(buffer_mutex);
+    vector<LidarScan> recent_scans;
+    
+    int start_index = max(0, (int)scan_buffer.size() - count);
+    for (int i = start_index; i < (int)scan_buffer.size(); i++) {
+        recent_scans.push_back(scan_buffer[i]);
     }
     
-    if (hull_history.size() < 3) {
+    return recent_scans;
+}
+
+size_t LidarBuffer::size() const {
+    lock_guard<mutex> lock(buffer_mutex);
+    return scan_buffer.size();
+}
+
+void LidarBuffer::clear() {
+    lock_guard<mutex> lock(buffer_mutex);
+    scan_buffer.clear();
+    next_scan_id = 0;
+}
+
+LidarScan LidarBuffer::getScanByTimestamp(long timestamp) const {
+    lock_guard<mutex> lock(buffer_mutex);
+    
+    for (const auto& scan : scan_buffer) {
+        if (abs(scan.timestamp - timestamp) < 50) {
+            return scan;
+        }
+    }
+    return LidarScan();
+}
+
+vector<LidarScan> LidarBuffer::getScansInTimeRange(long start_time, long end_time) const {
+    lock_guard<mutex> lock(buffer_mutex);
+    vector<LidarScan> range_scans;
+    
+    for (const auto& scan : scan_buffer) {
+        if (scan.timestamp >= start_time && scan.timestamp <= end_time) {
+            range_scans.push_back(scan);
+        }
+    }
+    return range_scans;
+}
+
+// === RealtimeStabilizer Implementation ===
+bool RealtimeStabilizer::update(const vector<LidarPoint>& new_points) {
+    lock_guard<mutex> lock(stabilizer_mutex);
+    
+    if (new_points.empty()) return false;
+    
+    point_history.push_back(new_points);
+    
+    if (point_history.size() > history_window) {
+        point_history.pop_front();
+    }
+    
+    if (point_history.size() < 3) {
         is_stable = false;
         return false;
     }
     
-    vector<Point2D> avg_hull = compute_average_hull();
+    vector<LidarPoint> candidate_stable = computeStabilizedPoints();
     
-    if (is_hull_stable_internal(avg_hull)) {
-        stable_count++;
-        if (stable_count >= 3) {
-            stable_hull = avg_hull;
-            
-            // Transform to global coordinate
-            global_hull = transform_hull_to_global(stable_hull, robot_pose);
-            
+    if (checkStability(candidate_stable)) {
+        stable_frame_count++;
+        if (stable_frame_count >= 3) {
+            stable_points = candidate_stable;
             is_stable = true;
             return true;
         }
     } else {
-        stable_count = 0;
+        stable_frame_count = 0;
         is_stable = false;
     }
     
     return false;
 }
 
-/**
- * @brief Lấy convex hull ổn định gần nhất trong hệ tọa độ cục bộ.
- * @return Vector các điểm 2D tạo thành hull ổn định cục bộ.
- */
-vector<Point2D> SlamConvexHullManager::get_stable_hull() const {
-    lock_guard<mutex> lock(hull_mutex);
-    return stable_hull;
+vector<LidarPoint> RealtimeStabilizer::getStablePoints() const {
+    lock_guard<mutex> lock(stabilizer_mutex);
+    return stable_points;
 }
 
-/**
- * @brief Lấy convex hull ổn định gần nhất trong hệ tọa độ toàn cục.
- * @return Vector các điểm 2D tạo thành hull ổn định toàn cục.
- */
-vector<Point2D> SlamConvexHullManager::get_global_hull() const {
-    lock_guard<mutex> lock(hull_mutex);
-    return global_hull;
-}
-
-/**
- * @brief Kiểm tra xem hull hiện tại có được coi là ổn định hay không.
- * @return true nếu hull ổn định.
- */
-bool SlamConvexHullManager::is_hull_stable() const {
-    lock_guard<mutex> lock(hull_mutex);
+bool RealtimeStabilizer::isDataStable() const {
+    lock_guard<mutex> lock(stabilizer_mutex);
     return is_stable;
 }
 
-/**
- * @brief (Private) Tính toán một "hull trung bình" từ lịch sử các hull.
- * @return Một convex hull mới được tính từ tất cả các điểm trong lịch sử.
- */
-vector<Point2D> SlamConvexHullManager::compute_average_hull() {
-    if (hull_history.empty()) return {};
+float RealtimeStabilizer::getStabilityScore() const {
+    lock_guard<mutex> lock(stabilizer_mutex);
+    if (point_history.size() < 2) return 0.0f;
     
-    vector<Point2D> all_points;
-    for (const auto& hull : hull_history) {
-        all_points.insert(all_points.end(), hull.begin(), hull.end());
-    }
+    float total_variance = 0.0f;
+    int comparison_count = 0;
     
-    return compute_convex_hull(all_points);
-}
-
-/**
- * @brief (Private) Kiểm tra nội bộ xem một hull mới có ổn định so với hull ổn định hiện tại không.
- * @param new_hull Hull ứng cử viên để kiểm tra.
- * @return true nếu chênh lệch nằm trong ngưỡng cho phép.
- */
-bool SlamConvexHullManager::is_hull_stable_internal(const vector<Point2D>& new_hull) {
-    if (stable_hull.empty()) return true;
-    if (new_hull.size() != stable_hull.size()) return false;
-    
-    float total_diff = 0.0f;
-    for (size_t i = 0; i < new_hull.size(); i++) {
-        float dx = new_hull[i].x - stable_hull[i].x;
-        float dy = new_hull[i].y - stable_hull[i].y;
-        total_diff += sqrt(dx*dx + dy*dy);
-    }
-    
-    if (new_hull.empty()) return true; // Avoid division by zero
-    float avg_diff = total_diff / new_hull.size();
-    return avg_diff < stability_threshold;
-}
-
-/**
- * @brief (Private) Tính toán convex hull của một tập hợp các điểm.
- * @param points Vector các điểm đầu vào.
- * @return Vector các điểm tạo thành convex hull.
- */
-vector<Point2D> SlamConvexHullManager::compute_convex_hull(vector<Point2D> points) {
-    if (points.size() <= 1) return points;
-    
-    sort(points.begin(), points.end());
-    points.erase(unique(points.begin(), points.end()), points.end());
-    
-    if (points.size() <= 1) return points;
-    
-    vector<Point2D> hull;
-    
-    // Lower hull
-    for (const auto& p : points) {
-        while (hull.size() >= 2 && 
-               cross_product(hull[hull.size()-2], hull[hull.size()-1], p) <= 0) {
-            hull.pop_back();
+    for (size_t i = 1; i < point_history.size(); i++) {
+        const auto& prev = point_history[i-1];
+        const auto& curr = point_history[i];
+        
+        size_t min_size = min(prev.size(), curr.size());
+        for (size_t j = 0; j < min_size; j++) {
+            float dx = curr[j].x - prev[j].x;
+            float dy = curr[j].y - prev[j].y;
+            total_variance += dx*dx + dy*dy;
+            comparison_count++;
         }
-        hull.push_back(p);
     }
     
-    // Upper hull
-    int lower_size = hull.size();
-    for (int i = points.size() - 2; i >= 0; i--) {
-        const auto& p = points[i];
-        while (hull.size() > lower_size && 
-               cross_product(hull[hull.size()-2], hull[hull.size()-1], p) <= 0) {
-            hull.pop_back();
+    if (comparison_count == 0) return 0.0f;
+    float avg_variance = total_variance / comparison_count;
+    
+    return 1.0f / (1.0f + avg_variance * 100.0f);
+}
+
+vector<LidarPoint> RealtimeStabilizer::computeStabilizedPoints() {
+    if (point_history.empty()) return {};
+    
+    map<int, vector<LidarPoint>> angle_groups; 
+    
+    for (const auto& frame : point_history) {
+        for (const auto& point : frame) {
+            int angle_key = (int)(point.angle * 180.0f / M_PI * 10.0f);
+            angle_groups[angle_key].push_back(point);
         }
-        hull.push_back(p);
     }
     
-    if (hull.size() > 1) hull.pop_back();
-    return hull;
-}
-
-/**
- * @brief (Private) Tính tích có hướng (cross product) của 3 điểm.
- * @param O Điểm gốc.
- * @param A Điểm thứ nhất.
- * @param B Điểm thứ hai.
- * @return Giá trị > 0 cho rẽ trái, < 0 cho rẽ phải, và = 0 nếu thẳng hàng.
- */
-float SlamConvexHullManager::cross_product(const Point2D& O, const Point2D& A, const Point2D& B) {
-    return (A.x - O.x) * (B.y - O.y) - (A.y - O.y) * (B.x - O.x);
-}
-
-/**
- * @brief (Private) Chuyển đổi một hull từ tọa độ cục bộ sang tọa độ toàn cục.
- * @param local_hull Hull trong tọa độ cục bộ.
- * @param robot_pose Pose của robot.
- * @return Hull trong tọa độ toàn cục.
- */
-vector<Point2D> SlamConvexHullManager::transform_hull_to_global(const vector<Point2D>& local_hull, 
-                                                                const RobotPose& robot_pose) {
-    vector<Point2D> global_hull_points;
-    global_hull_points.reserve(local_hull.size());
-    float cos_theta = cos(robot_pose.theta);
-    float sin_theta = sin(robot_pose.theta);
-
-    for (const auto& point : local_hull) {
-        float global_x = robot_pose.x + point.x * cos_theta - point.y * sin_theta;
-        float global_y = robot_pose.y + point.x * sin_theta + point.y * cos_theta;
-        global_hull_points.emplace_back(global_x, global_y, point.distance);
+    vector<LidarPoint> stabilized;
+    
+    for (const auto& [angle_key, points] : angle_groups) {
+        if (points.size() < 2) continue;
+        
+        float sum_x = 0, sum_y = 0, sum_dist = 0;
+        float sum_angle = 0;
+        uint32_t sum_intensity = 0;
+        long latest_timestamp = 0;
+        
+        for (const auto& p : points) {
+            sum_x += p.x;
+            sum_y += p.y;
+            sum_dist += p.distance;
+            sum_angle += p.angle;
+            sum_intensity += p.intensity;
+            latest_timestamp = max(latest_timestamp, p.timestamp);
+        }
+        
+        float inv_count = 1.0f / points.size();
+        LidarPoint stabilized_point(
+            sum_x * inv_count,
+            sum_y * inv_count,
+            sum_dist * inv_count,
+            sum_angle * inv_count,
+            sum_intensity / points.size(),
+            latest_timestamp
+        );
+        
+        stabilized.push_back(stabilized_point);
     }
-    return global_hull_points;
+    
+    sort(stabilized.begin(), stabilized.end(), 
+         [](const LidarPoint& a, const LidarPoint& b) {
+             return a.angle < b.angle;
+         });
+    
+    return stabilized;
+}
+
+bool RealtimeStabilizer::checkStability(const vector<LidarPoint>& new_points) {
+    if (stable_points.empty()) return true;
+    if (new_points.size() != stable_points.size()) return false;
+    
+    float total_deviation = 0.0f;
+    int valid_comparisons = 0;
+    
+    for (size_t i = 0; i < min(new_points.size(), stable_points.size()); i++) {
+        float dx = new_points[i].x - stable_points[i].x;
+        float dy = new_points[i].y - stable_points[i].y;
+        float deviation = sqrt(dx*dx + dy*dy);
+        
+        total_deviation += deviation;
+        valid_comparisons++;
+    }
+    
+    if (valid_comparisons == 0) return false;
+    
+    float avg_deviation = total_deviation / valid_comparisons;
+    return avg_deviation < stability_threshold;
 }
 
 // === LidarProcessor Implementation ===
-
-/**
- * @brief Constructor cho LidarProcessor.
- * @param local_ip Địa chỉ IP cục bộ để lắng nghe.
- * @param local_port Cổng cục bộ để lắng nghe.
- * @param laser_ip Địa chỉ IP của cảm biến LiDAR.
- * @param laser_port Cổng của cảm biến LiDAR.
- */
 LidarProcessor::LidarProcessor(const string& local_ip, const string& local_port,
-                                       const string& laser_ip, const string& laser_port)
+                                             const string& laser_ip, const string& laser_port)
     : local_ip(local_ip), local_port(local_port), laser_ip(laser_ip), laser_port(laser_port),
-      is_running(false), is_processing(false), scan_count(0), valid_hulls_count(0), 
-      loop_closures_count(0) {
+      is_running(false), is_processing(false), total_scans(0), valid_scans(0), 
+      stable_scans(0), average_points_per_scan(0), processing_rate(0) {
     
-    hull_manager = make_unique<SlamConvexHullManager>(8, 0.15f);
-    slam_system = make_unique<SimpleSLAM>(2.0f, 1.5f);
+    noise_filter = make_unique<NoiseFilter>();
+    data_buffer = make_unique<LidarBuffer>(100);
+    stabilizer = make_unique<RealtimeStabilizer>();
 }
 
-/**
- * @brief Destructor cho LidarProcessor.
- */
 LidarProcessor::~LidarProcessor() {
-    stop_processing();
+    stop();
 }
 
-/**
- * @brief Khởi tạo kết nối UDP đến LiDAR.
- * @return true nếu khởi tạo thành công.
- */
 bool LidarProcessor::initialize() {
     try {
-        cout << "[SLAM-LIDAR] Khởi tạo SLAM LiDAR system..." << endl;
+        #ifdef ENABLE_LOG
+            LOG_INFO << "[LIDAR-RT] Initializing Realtime LiDAR System...";
+            LOG_INFO << "[LIDAR-RT] Local: " << local_ip << ":" << local_port;
+            LOG_INFO << "[LIDAR-RT] Laser: " << laser_ip << ":" << laser_port;
+        #else
+            cout << "[LIDAR-RT] Initializing Realtime LiDAR System..." << endl;
+            cout << "[LIDAR-RT] Local: " << local_ip << ":" << local_port << endl;
+            cout << "[LIDAR-RT] Laser: " << laser_ip << ":" << laser_port << endl;
+        #endif
+        
+        // Tạo đối tượng LakiBeamUDP
         lidar = make_unique<LakiBeamUDP>(local_ip, local_port, laser_ip, laser_port);
-        cout << "[SLAM-LIDAR] ✅ Khởi tạo thành công!" << endl;
+        
+        // THÊM: Kiểm tra kết nối thực sự bằng cách thử lấy dữ liệu
+        cout << "[LIDAR-RT] Waiting for LiDAR data..." << endl;
+        
+        // Thử lấy dữ liệu trong vòng 5 giây
+        auto start_wait = chrono::steady_clock::now();
+        const int timeout_seconds = 5;
+        bool data_received = false;
+        
+        while (chrono::steady_clock::now() - start_wait < chrono::seconds(timeout_seconds)) {
+            repark_t test_packet;
+            if (lidar->get_repackedpack(test_packet)) {
+                if (test_packet.maxdots > 0 && test_packet.maxdots <= CONFIG_CIRCLE_DOTS) {
+                    data_received = true;
+#ifdef ENABLE_LOG
+                    LOG_INFO << "[LIDAR-RT] LiDAR data received! Points: " << test_packet.maxdots;
+#else
+                    cout << "[LIDAR-RT] LiDAR data received! Points: " << test_packet.maxdots << endl;
+#endif
+                    break;
+                }
+            }
+            this_thread::sleep_for(chrono::milliseconds(100));
+        }
+        
+        if (!data_received) {
+#ifdef ENABLE_LOG
+            LOG_ERROR << "[LIDAR-RT] No data received from LiDAR after " << timeout_seconds << " seconds!";
+            LOG_ERROR << "[LIDAR-RT] Please check: ";
+            LOG_ERROR << "[LIDAR-RT]   1. LiDAR is powered on";
+            LOG_ERROR << "[LIDAR-RT]   2. Network cable is connected";
+            LOG_ERROR << "[LIDAR-RT]   3. IP addresses are correct";
+            LOG_ERROR << "[LIDAR-RT]   4. Firewall is not blocking UDP port " << local_port;
+#else
+            cerr << "[LIDAR-RT] ERROR: No data received from LiDAR after " << timeout_seconds << " seconds!" << endl;
+            cerr << "[LIDAR-RT] Please check: " << endl;
+            cerr << "[LIDAR-RT]   1. LiDAR is powered on" << endl;
+            cerr << "[LIDAR-RT]   2. Network cable is connected" << endl;
+            cerr << "[LIDAR-RT]   3. IP addresses are correct" << endl;
+            cerr << "[LIDAR-RT]   4. Firewall is not blocking UDP port " << local_port << endl;
+#endif
+            
+            lidar.reset(); // Clean up
+            return false;
+        }
+        
+#ifdef ENABLE_LOG
+        LOG_INFO << "[LIDAR-RT] Initialization successful! LiDAR is responding.";
+#else
+        cout << "[LIDAR-RT] Initialization successful! LiDAR is responding." << endl;
+#endif
         return true;
+        
     } catch (const exception& e) {
-        cout << "[SLAM-LIDAR] ❌ Lỗi khởi tạo: " << e.what() << endl;
+#ifdef ENABLE_LOG
+        LOG_ERROR << "[LIDAR-RT] Initialization failed: " << e.what();
+#else
+        cerr << "[LIDAR-RT] Initialization failed: " << e.what() << endl;
+#endif
         return false;
     }
 }
 
-/**
- * @brief Bắt đầu vòng lặp xử lý dữ liệu LiDAR trong một luồng riêng.
- * @return true nếu có thể bắt đầu.
- */
-bool LidarProcessor::start_processing() {
+bool LidarProcessor::start() {
     if (!lidar) {
-        cout << "[SLAM-LIDAR] ❌ LiDAR chưa được khởi tạo!" << endl;
+        #ifdef ENABLE_LOG
+            LOG_ERROR << "[LIDAR-RT] LiDAR not initialized!";
+        #else
+            cout << "[LIDAR-RT]  LiDAR not initialized!" << endl;
+        #endif
         return false;
+    }
+    
+    if (is_running) {
+#ifdef ENABLE_LOG
+            LOG_WARNING << "[LIDAR-RT] Already running!";
+#else
+            cout << "[LIDAR-RT] ⚠️ Already running!" << endl;
+#endif
+        return true;
     }
     
     is_running = true;
     is_processing = true;
-    cout << "[SLAM-LIDAR] 🚀 Bắt đầu SLAM processing..." << endl;
+    start_time = high_resolution_clock::now();
+    
+    processing_thread = make_unique<thread>(&LidarProcessor::processLidarData, this);
+    
+#ifdef ENABLE_LOG
+        LOG_INFO << "[LIDAR-RT] Realtime processing started!";
+#else
+        cout << "[LIDAR-RT] Realtime processing started!" << endl;
+#endif
     return true;
 }
 
-/**
- * @brief Dừng vòng lặp xử lý dữ liệu LiDAR.
- */
-void LidarProcessor::stop_processing() {
+void LidarProcessor::stop() {
+    if (!is_running) return;
+    
+#ifdef ENABLE_LOG
+        LOG_INFO << "[LIDAR-RT] Stopping realtime processing...";
+#else
+        cout << "[LIDAR-RT] Stopping realtime processing..." << endl;
+#endif
+    
     is_running = false;
-    is_processing = false;
-    cout << "[SLAM-LIDAR] ⏹️ Dừng SLAM processing." << endl;
-}
-
-/**
- * @brief Đăng ký một hàm callback để nhận convex hull ổn định và pose.
- * @param callback Hàm callback có dạng `void(const vector<Point2D>&, const RobotPose&)`.
- */
-void LidarProcessor::set_hull_callback(function<void(const vector<Point2D>&, const RobotPose&)> callback) {
-    hull_callback = callback;
-}
-
-/**
- * @brief Đăng ký một hàm callback để nhận bản đồ (tập hợp các hull toàn cục).
- * @param callback Hàm callback có dạng `void(const vector<vector<Point2D>>&)`.
- */
-void LidarProcessor::set_map_callback(function<void(const vector<vector<Point2D>>&)> callback) {
-    map_callback = callback;
-}
-
-/**
- * @brief Lấy convex hull ổn định hiện tại trong tọa độ cục bộ.
- * @return Vector các điểm của hull ổn định cục bộ.
- */
-vector<Point2D> LidarProcessor::get_current_stable_hull() const {
-    if (hull_manager) {
-        return hull_manager->get_stable_hull();
+    
+    if (processing_thread && processing_thread->joinable()) {
+        processing_thread->join();
     }
-    return {};
+    
+    // LakiBeamUDP tự động dọn dẹp trong destructor
+    lidar.reset();
+    
+    printStatus();
+#ifdef ENABLE_LOG
+        LOG_INFO << "[LIDAR-RT] Stopped successfully.";
+#else
+        cout << "[LIDAR-RT] Stopped successfully." << endl;
+#endif
 }
 
-/**
- * @brief Lấy convex hull ổn định hiện tại trong tọa độ toàn cục.
- * @return Vector các điểm của hull ổn định toàn cục.
- */
-vector<Point2D> LidarProcessor::get_global_hull() const {
-    if (hull_manager) {
-        return hull_manager->get_global_hull();
+// Main processing loop - PHẦN QUAN TRỌNG NHẤT
+void LidarProcessor::processLidarData() {
+#ifdef ENABLE_LOG
+        LOG_INFO << "[LIDAR-RT] Processing thread started";
+#else
+        cout << "[LIDAR-RT] Processing thread started" << endl;
+#endif
+    
+    while (is_running) {
+        if (!is_processing) {
+            this_thread::sleep_for(chrono::milliseconds(10));
+            continue;
+        }
+        
+        // Lấy dữ liệu từ LiDAR SDK
+        repark_t raw_packet;
+        
+        // Sử dụng get_repackedpack (non-blocking) để tránh block thread
+        bool has_data = lidar->get_repackedpack(raw_packet);
+        
+        if (!has_data) {
+            // Không có dữ liệu mới, chờ một chút
+            this_thread::sleep_for(chrono::milliseconds(1));
+            continue;
+        }
+        
+        // Kiểm tra dữ liệu hợp lệ
+        if (raw_packet.maxdots == 0 || raw_packet.maxdots > CONFIG_CIRCLE_DOTS) {
+            continue;
+        }
+        
+        // Chuyển đổi raw data sang điểm
+        vector<LidarPoint> raw_points = convertRawDataToPoints(raw_packet);
+        
+        if (raw_points.empty()) {
+            continue;
+        }
+        
+        // Áp dụng noise filter
+        vector<LidarPoint> filtered_points = noise_filter->filter(raw_points);
+        
+        // Cập nhật stabilizer
+        bool became_stable = stabilizer->update(filtered_points);
+        
+        // Tạo scan object
+        LidarScan scan = createScanFromPoints(filtered_points);
+        
+        // Thêm vào buffer
+        data_buffer->addScan(scan);
+        
+        // Cập nhật thống kê
+        total_scans++;
+        if (!filtered_points.empty()) {
+            valid_scans++;
+        }
+        if (stabilizer->isDataStable()) {
+            stable_scans++;
+        }
+        
+        // Tính average points per scan
+        if (total_scans > 0) {
+            average_points_per_scan = (average_points_per_scan * (total_scans - 1) + filtered_points.size()) / total_scans;
+        }
+        
+        // Gọi callbacks nếu có
+        {
+            lock_guard<mutex> lock(callback_mutex);
+            
+            // Realtime callback cho mọi frame
+            if (realtime_callback) {
+                realtime_callback(filtered_points);
+            }
+            
+            // Scan callback
+            if (scan_callback) {
+                scan_callback(scan);
+            }
+            
+            // Stable points callback khi dữ liệu vừa ổn định
+            if (stable_points_callback && became_stable) {
+                stable_points_callback(stabilizer->getStablePoints());
+            }
+        }
+        
+        // Cập nhật processing rate
+        updateProcessingRate();
+        
+        // Giảm tải CPU
+        this_thread::sleep_for(chrono::microseconds(100));
     }
-    return {};
+    
+#ifdef ENABLE_LOG
+        LOG_INFO << "[LIDAR-RT] Processing thread stopped";
+#else
+        cout << "[LIDAR-RT] Processing thread stopped" << endl;
+#endif
 }
 
-/**
- * @brief Lấy pose hiện tại của robot.
- * @return Pose hiện tại của robot.
- */
-RobotPose LidarProcessor::get_current_pose() const {
-    lock_guard<mutex> lock(pose_mutex);
-    return current_robot_pose;
-}
+// Chuyển đổi dữ liệu thô sang điểm
+vector<LidarPoint> LidarProcessor::convertRawDataToPoints(const repark_t& pack) {
+    vector<LidarPoint> points;
+    points.reserve(pack.maxdots);
+    
+    long timestamp = getCurrentTimestamp();
+    
+    // Duyệt qua tất cả các điểm trong gói dữ liệu
+    for (uint16_t i = 0; i < pack.maxdots; i++) {
+        const cicle_pack_t& dot = pack.dotcloud[i];
+        float angle_deg = dot.angle / 100.0f;
+        // Chuyển đổi từ dữ liệu thô
+        // // Chuyển đổi góc (từ raw * 100 sang độ)
+        // float angle_deg = dot.angle / 100.0;
+        // angle đã ở dạng độ * 100 trong cicle_pack_t
+        float angle = dot.angle / 100.0f * M_PI / 180.0f; // Chuyển sang radian
+        float distance = dot.distance / 1000.0f; // mm sang mét
+        uint16_t intensity = dot.rssi;
+        
+        // Bỏ qua các điểm không hợp lệ
+        if (distance <= 0.001f || distance > 100.0f) {
+            continue;
+        }
 
-/**
- * @brief Lấy tất cả các hull đã được ánh xạ trong tọa độ toàn cục.
- * @return Vector chứa các hull toàn cục.
- */
-vector<vector<Point2D>> LidarProcessor::get_mapped_hulls() const {
-    if (slam_system) {
-        return slam_system->get_all_global_hulls();
+        
+
+
+        // Chuyển sang tọa độ Cartesian
+        float x= distance * cos(angle);
+        float y = distance * sin(angle);
+        
+        points.emplace_back(x, y, distance, angle, intensity, timestamp);
     }
-    return {};
+    
+    return points;
 }
 
-/**
- * @brief Kiểm tra xem kết nối LiDAR đã được khởi tạo chưa.
- * @return true nếu đã kết nối.
- */
-bool LidarProcessor::is_lidar_connected() const {
-    return lidar != nullptr;
+// Tạo scan từ điểm
+LidarScan LidarProcessor::createScanFromPoints(const vector<LidarPoint>& points) {
+    LidarScan scan(getCurrentTimestamp());
+    scan.points = points;
+    return scan;
 }
 
-/**
- * @brief Kiểm tra xem convex hull có đang ở trạng thái ổn định không.
- * @return true nếu ổn định.
- */
-bool LidarProcessor::is_hull_stable() const {
-    if (hull_manager) {
-        return hull_manager->is_hull_stable();
+// Utilities
+long LidarProcessor::getCurrentTimestamp() const {
+    return chrono::duration_cast<chrono::milliseconds>(
+        chrono::system_clock::now().time_since_epoch()
+    ).count();
+}
+
+void LidarProcessor::updateProcessingRate() {
+    auto now = high_resolution_clock::now();
+    if (last_process_time.time_since_epoch().count() > 0) {
+        auto duration = duration_cast<microseconds>(now - last_process_time);
+        float rate = 1000000.0f / duration.count();
+        processing_rate = rate;
+    }
+    last_process_time = now;
+}
+
+void LidarProcessor::printStatus() const {
+#ifdef ENABLE_LOG
+        LOG_INFO << "\n--- LiDAR Processor Status ---\n"
+                 << "Total Scans: " << total_scans.load() << "\n"
+                 << "Valid Scans: " << valid_scans.load() << "\n"
+                 << "Stable Scans: " << stable_scans.load() << "\n"
+                 << "Processing Rate: " << processing_rate.load() << " Hz\n"
+                 << "Data Validity: " << getDataValidityRatio() * 100 << "%\n"
+                 << "Stability Score: " << getStabilityScore() << "\n"
+                 << "Uptime: " << getUptime() << " seconds\n"
+                 << "-------------------------------";
+#else
+            cout << "\n--- LiDAR Processor Status ---" << endl;
+            cout << "Total Scans: " << total_scans.load() << endl;
+            cout << "Valid Scans: " << valid_scans.load() << endl;
+            cout << "Stable Scans: " << stable_scans.load() << endl;
+            cout << "Processing Rate: " << processing_rate.load() << " Hz" << endl;
+            cout << "Data Validity: " << getDataValidityRatio() * 100 << "%" << endl;
+            cout << "Stability Score: " << getStabilityScore() << endl;
+            cout << "Uptime: " << getUptime() << " seconds" << endl;
+            cout << "-------------------------------\n" << endl;
+#endif
+}
+
+// Validation
+bool LidarProcessor::validateScanData(const repark_t& pack) const {
+    // Kiểm tra số lượng điểm hợp lệ
+    if (pack.maxdots == 0 || pack.maxdots > CONFIG_CIRCLE_DOTS) {
+        return false;
+    }
+    
+    // Kiểm tra interval time hợp lệ
+    if (pack.interval == 0) {
+        return false;
+    }
+    
+    return true;
+}
+
+vector<LidarPoint> LidarProcessor::preprocessPoints(const vector<LidarPoint>& raw_points) {
+    // Có thể thêm preprocessing logic ở đây nếu cần
+    return raw_points;
+}
+
+// Các hàm getter
+bool LidarProcessor::isDataStable() const {
+    if (stabilizer) {
+        return stabilizer->isDataStable();
     }
     return false;
 }
 
-/**
- * @brief Kiểm tra xem hệ thống SLAM có đang hoạt động không.
- * @return true nếu đang xử lý.
- */
-bool LidarProcessor::is_slam_active() const {
-    return is_processing.load();
-}
-
-/**
- * @brief Cập nhật thủ công pose của robot (ví dụ từ odometry).
- * @param new_pose Pose mới của robot.
- */
-void LidarProcessor::update_robot_pose(const RobotPose& new_pose) {
-    lock_guard<mutex> lock(pose_mutex);
-    current_robot_pose = new_pose;
-}
-
-/**
- * @brief (Private) Lấy timestamp hiện tại dưới dạng milliseconds.
- * @return Timestamp hiện tại.
- */
-long LidarProcessor::get_current_timestamp() const {
-    auto now = chrono::system_clock::now();
-    return chrono::duration_cast<chrono::milliseconds>(now.time_since_epoch()).count();
-}
-
-/**
- * @brief Vòng lặp chính xử lý dữ liệu LiDAR và SLAM.
- * 
- * Hàm này được thiết kế để chạy trong một luồng riêng biệt.
- */
-void LidarProcessor::process_slam_lidar_data() {
-    if (!lidar || !is_running) {
-        cout << "[SLAM-LIDAR] ❌ Không thể bắt đầu - hệ thống chưa sẵn sàng" << endl;
-        return;
+float LidarProcessor::getStabilityScore() const {
+    if (stabilizer) {
+        return stabilizer->getStabilityScore();
     }
-    
-    cout << "[SLAM-LIDAR] 🗺️ SLAM LiDAR thread đã bắt đầu..." << endl;
-    
-    // Biến global_running cần được định nghĩa ở đâu đó trong chương trình chính
-    // để có thể dừng tất cả các luồng một cách an toàn.
-    extern volatile bool global_running; 
-    
-    while (is_running && global_running) {
-        repark_t scan_data;
-        
-        if (lidar->get_repackedpack(scan_data)) {
-            process_single_scan_with_slam(scan_data);
-        } else {
-            usleep(1000); // 1ms sleep to prevent busy-waiting
-        }
-    }
-    
+    return 0.0f;
+}
+
+float LidarProcessor::getDataValidityRatio() const {
+    long total = total_scans.load();
+    if (total == 0) return 0.0f;
+    return static_cast<float>(valid_scans.load()) / total;
+}
+
+float LidarProcessor::getUptime() const {
+    if (!is_running) return 0.0f;
+    auto now = high_resolution_clock::now();
+    return duration_cast<duration<float>>(now - start_time).count();
+}
+
+void LidarProcessor::pauseProcessing() {
     is_processing = false;
-    print_slam_status();
-    cout << "[SLAM-LIDAR] 🏁 SLAM LiDAR thread đã kết thúc." << endl;
 }
 
-/**
- * @brief (Private) Xử lý một gói dữ liệu scan từ LiDAR với SLAM.
- * @param pack Gói dữ liệu thô `repark_t` từ LiDAR.
- */
-void LidarProcessor::process_single_scan_with_slam(const repark_t& pack) {
-    if (pack.maxdots == 0) return;
-    
-    scan_count++;
-    
-    // Chuyển đổi dữ liệu LiDAR thành điểm 2D với timestamp
-    vector<Point2D> points = convert_lidar_to_points(pack);
-    if (points.empty()) return;
-
-    // Cập nhật pose và thêm scan mới vào SLAM
-    RobotPose estimated_pose;
-    if (slam_system->add_scan(points, estimated_pose)) {
-        lock_guard<mutex> lock(pose_mutex);
-        current_robot_pose = estimated_pose;
-    }
-
-    // Cập nhật hull manager
-    if (hull_manager->update(points, get_current_pose())) {
-        valid_hulls_count++;
-        // Gọi callback nếu có hull ổn định mới
-        if (hull_callback) {
-            hull_callback(hull_manager->get_global_hull(), get_current_pose());
-        }
-    }
-
-    // Gọi callback map mỗi 10 scan
-    if (scan_count % 10 == 0 && map_callback) {
-        map_callback(get_mapped_hulls());
-    }
+void LidarProcessor::resumeProcessing() {
+    is_processing = true;
 }
 
-/**
- * @brief (Private) Chuyển đổi dữ liệu thô từ LiDAR thành một vector các điểm 2D.
- * @param pack Gói dữ liệu thô `repark_t` từ LiDAR.
- * @return Một vector các điểm `Point2D`.
- */
-vector<Point2D> LidarProcessor::convert_lidar_to_points(const repark_t& pack) {
-    vector<Point2D> points;
-    points.reserve(pack.maxdots);
-
-    for (u16_t i = 0; i < pack.maxdots; i++) {
-        const auto& point = pack.dotcloud[i];
-        
-        // Lọc nhiễu và các điểm không hợp lệ
-        if (point.distance > 10 && point.distance < 50000) { // 1cm to 50m
-            float angle_deg = angle_to_degrees(point.angle);
-            float distance_m = distance_to_meters(point.distance);
-            
-            float angle_rad = angle_deg * M_PI / 180.0f;
-            float x = distance_m * cos(angle_rad);
-            float y = distance_m * sin(angle_rad);
-            
-            points.emplace_back(x, y, distance_m);
-        }
-    }
-    return points;
+void LidarProcessor::resetStatistics() {
+    total_scans = 0;
+    valid_scans = 0;
+    stable_scans = 0;
 }
 
-/**
- * @brief (Private) In ra trạng thái hiện tại của hệ thống SLAM.
- */
-void LidarProcessor::print_slam_status() const {
-    cout << "\n--- SLAM Status Summary ---" << endl;
-    cout << "Total Scans Processed: " << get_scan_count() << endl;
-    cout << "Valid Stable Hulls Found: " << get_valid_hulls_count() << endl;
-    cout << "Loop Closures Detected: " << get_loop_closures_count() << endl;
-    if (slam_system) {
-        RobotPose p = get_current_pose();
-        cout << "Final Pose (x, y, theta): (" 
-             << fixed << setprecision(2) << p.x << ", " << p.y << ", " << p.theta 
-             << ")" << endl;
+// Setters cho parameters
+void LidarProcessor::setNoiseFilterParams(float min_dist, float max_dist, 
+                                                 float max_jump, int min_neighbors) {
+    noise_filter = make_unique<NoiseFilter>(min_dist, max_dist, max_jump, min_neighbors);
+}
+
+void LidarProcessor::setStabilizerParams(int window, float stability_thresh, 
+                                               float outlier_thresh) {
+    stabilizer = make_unique<RealtimeStabilizer>(window, stability_thresh, outlier_thresh);
+}
+
+void LidarProcessor::setBufferSize(size_t max_size) {
+    data_buffer = make_unique<LidarBuffer>(max_size);
+}
+
+// Callbacks
+void LidarProcessor::setRealtimeCallback(function<void(const vector<LidarPoint>&)> callback) {
+    lock_guard<mutex> lock(callback_mutex);
+    realtime_callback = callback;
+}
+
+void LidarProcessor::setScanCallback(function<void(const LidarScan&)> callback) {
+    lock_guard<mutex> lock(callback_mutex);
+    scan_callback = callback;
+}
+
+void LidarProcessor::setStablePointsCallback(function<void(const vector<LidarPoint>&)> callback) {
+    lock_guard<mutex> lock(callback_mutex);
+    stable_points_callback = callback;
+}
+
+// Data access
+vector<LidarPoint> LidarProcessor::getCurrentPoints() const {
+    LidarScan latest = data_buffer->getLatestScan();
+    return latest.points;
+}
+
+vector<LidarPoint> LidarProcessor::getStablePoints() const {
+    if (stabilizer) {
+        return stabilizer->getStablePoints();
     }
-    cout << "---------------------------\n" << endl;
+    return {};
+}
+
+LidarScan LidarProcessor::getLatestScan() const {
+    return data_buffer->getLatestScan();
+}
+
+vector<LidarScan> LidarProcessor::getRecentScans(int count) const {
+    return data_buffer->getRecentScans(count);
+}
+
+bool LidarProcessor::isConnected() const {
+    return lidar != nullptr;
+}
+
+bool LidarProcessor::isProcessing() const {
+    return is_processing.load();
 }
