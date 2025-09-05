@@ -310,6 +310,17 @@ LidarProcessor::LidarProcessor(const string& local_ip, const string& local_port,
       is_running(false), is_processing(false), total_scans(0), valid_scans(0), 
       stable_scans(0), average_points_per_scan(0), processing_rate(0) {
     
+// Đăng ký App ID riêng cho LIDAR
+    LOG_REGISTER_APP("LIDAR", "Library for LiDAR Processing");
+
+    // Đăng ký các context cho LIDAR
+    LOG_REGISTER_CONTEXT("CORE-LIDAR", "Core LiDAR Functions");
+
+
+    // Set app mặc định cho LIDAR
+    LOG_SET_APP("LIBA");
+    LOG_SET_CONTEXT("CORE");
+
     noise_filter = make_unique<NoiseFilter>();
     data_buffer = make_unique<LidarBuffer>(100);
     stabilizer = make_unique<RealtimeStabilizer>();
@@ -320,6 +331,7 @@ LidarProcessor::~LidarProcessor() {
 }
 
 bool LidarProcessor::initialize() {
+    Logger& logger = Logger::get_instance();
     try {
         #ifdef ENABLE_LOG
             LOG_INFO << "[LIDAR-RT] Initializing Realtime LiDAR System...";

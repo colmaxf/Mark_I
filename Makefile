@@ -1,9 +1,9 @@
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -pthread
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -pthread 
 INCLUDES = -I. -Ilogger -IMCprotocollib -ILidarlib
 
 # Thêm các thư viện Boost cần thiết
-LIBS = -lboost_thread -lboost_system -lpthread
+LIBS = -lboost_thread -lboost_system -lpthread -ldlt
 
 # Source files
 SOURCES = main.cpp \
