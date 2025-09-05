@@ -19,9 +19,9 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
-#include "./config.h"
+#include "../config.h"
 #ifdef ENABLE_LOG
-#include "./logger/Logger.h"
+#include "../logger/Logger.h"
 #endif
 
 /// Linux socket compatibility defines
@@ -178,7 +178,8 @@ public:
     
     /// @}
 
-
+    // Module logger - TỰ ĐỘNG QUẢN LÝ APP_ID
+    DECLARE_MODULE_LOGGER()
 private:
     SOCKET m_socket_fd;               ///< Socket file descriptor
     std::string m_plc_ip;             ///< PLC IP address

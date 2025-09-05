@@ -19,7 +19,14 @@ static const uint8_t RESP_BATCH_WRITE_BIT = 0x84;  ///< Response for batch write
 /// @}
 
 MCProtocol::MCProtocol(const std::string& ip, int port, uint16_t timer_250ms)
-    : m_plc_ip(ip), m_plc_port(port), m_is_connected(false), m_monitoring_timer(timer_250ms) {
+    : m_plc_ip(ip), m_plc_port(port), m_is_connected(false), m_monitoring_timer(timer_250ms),INIT_MODULE_LOGGER("MCPR") {
+        // ===== ĐĂNG KÝ 1 LẦN DUY NHẤT TRONG CONSTRUCTOR =====
+    LOG_REGISTER_APP("MCPR", "Library MC - Protocol Module");
+
+    // Đăng ký TẤT CẢ contexts mà LibC sẽ dùng
+    LOG_REGISTER_CONTEXT("CORE", "Processing");
+    // Set context mặc định
+    m_logger.setDefaultContext("CORE");
     m_socket_fd = INVALID_SOCKET;
 }
 
@@ -55,7 +62,7 @@ bool MCProtocol::connect() {
     m_socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (m_socket_fd == INVALID_SOCKET) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "Failed to create socket";
+        MODULE_LOG_ERROR << "Failed to create socket";
 #else
         std::cerr << "Failed to create socket" << std::endl;
 #endif
@@ -71,7 +78,7 @@ bool MCProtocol::connect() {
     // Convert IP address from string to binary
     if (inet_pton(AF_INET, m_plc_ip.c_str(), &server_addr.sin_addr) <= 0) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "Invalid IP address: " << m_plc_ip;
+        MODULE_LOG_ERROR << "Invalid IP address: " << m_plc_ip;
 #else
         std::cerr << "Invalid IP address: " << m_plc_ip << std::endl;
 #endif
@@ -83,7 +90,7 @@ bool MCProtocol::connect() {
     // Establish connection to PLC
     if (::connect(m_socket_fd, (sockaddr*)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "Failed to connect to PLC at " << m_plc_ip << ":" << m_plc_port;
+        MODULE_LOG_ERROR << "Failed to connect to PLC at " << m_plc_ip << ":" << m_plc_port;
 #else
         std::cerr << "Failed to connect to PLC at " << m_plc_ip << ":" << m_plc_port << std::endl;
 #endif  
@@ -94,7 +101,7 @@ bool MCProtocol::connect() {
 
     m_is_connected = true;
 #ifdef ENABLE_LOG
-    LOG_INFO << "Connected to PLC at " << m_plc_ip << ":" << m_plc_port;
+    MODULE_LOG_INFO << "Connected to PLC at " << m_plc_ip << ":" << m_plc_port;
 #else
     std::cout << "Connected to PLC at " << m_plc_ip << ":" << m_plc_port << std::endl;
 #endif
@@ -113,7 +120,7 @@ std::vector<uint16_t> MCProtocol::readWords(const std::string& device, uint32_t 
     // Check connection status
     if (!m_is_connected) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "Not connected to PLC";
+        MODULE_LOG_ERROR << "Not connected to PLC";
 #else
         throw std::runtime_error("Not connected to PLC");
 #endif
@@ -166,13 +173,13 @@ std::vector<uint16_t> MCProtocol::readWords(const std::string& device, uint32_t 
     request.push_back(count & 0xFF);                      // Low byte
     request.push_back((count >> 8) & 0xFF);               // High byte
 #ifdef ENABLE_LOG
-    LOG_INFO << "[MCProtocol] Sending request: " << vectorToHexString(request);
+    MODULE_LOG_INFO << "[MCProtocol] Sending request: " << vectorToHexString(request);
 #endif
 
     // Send request frame to PLC
     if (send(m_socket_fd, (char*)request.data(), request.size(), 0) == SOCKET_ERROR) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "Failed to send request";
+        MODULE_LOG_ERROR << "Failed to send request";
 #else
         throw std::runtime_error("Failed to send request");
 #endif
@@ -183,12 +190,12 @@ std::vector<uint16_t> MCProtocol::readWords(const std::string& device, uint32_t 
     int bytes_received = recv(m_socket_fd, (char*)response.data(), response.size(), 0);
 
 #ifdef ENABLE_LOG
-        LOG_INFO << "[MCProtocol] Received response: " << vectorToHexString(response);
+        MODULE_LOG_INFO << "[MCProtocol] Received response: " << vectorToHexString(response);
 #endif
 
     if (bytes_received <= 0) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "Failed to receive response";
+        MODULE_LOG_ERROR << "Failed to receive response";
 #else
         throw std::runtime_error("Failed to receive response");
 #endif
@@ -197,7 +204,7 @@ std::vector<uint16_t> MCProtocol::readWords(const std::string& device, uint32_t 
     // Validate response frame
     if (response[0] != RESP_BATCH_READ_WORD) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "Invalid response header";
+        MODULE_LOG_ERROR << "Invalid response header";
 #else
         throw std::runtime_error("Invalid response header");
 #endif
@@ -206,7 +213,7 @@ std::vector<uint16_t> MCProtocol::readWords(const std::string& device, uint32_t 
     // Check completion code (0x00 = success)
     if (response[1] != 0x00) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "PLC returned error code: " << std::to_string(response[1]);
+        MODULE_LOG_ERROR << "PLC returned error code: " << std::to_string(response[1]);
 #else
         throw std::runtime_error("PLC returned error code: " + std::to_string(response[1]));
 #endif
@@ -220,7 +227,7 @@ std::vector<uint16_t> MCProtocol::readWords(const std::string& device, uint32_t 
         result.push_back(value);
     }
 #ifdef ENABLE_LOG
-    LOG_INFO << "[MCProtocol] Received data: " << vectorToHexString(result);
+    MODULE_LOG_INFO << "[MCProtocol] Received data: " << vectorToHexString(result);
 #endif
 
     return result;
@@ -230,7 +237,7 @@ bool MCProtocol::writeWords(const std::string& device, uint32_t start_addr, cons
     // Check connection status
     if (!m_is_connected) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "Not connected to PLC";
+        MODULE_LOG_ERROR << "Not connected to PLC";
 #else
         throw std::runtime_error("Not connected to PLC");
 #endif
@@ -268,13 +275,13 @@ bool MCProtocol::writeWords(const std::string& device, uint32_t start_addr, cons
         request.push_back((value >> 8) & 0xFF);           // High byte second
     }
 #ifdef ENABLE_LOG
-    LOG_INFO << "[MCProtocol] Sending request: " << vectorToHexString(request);
+    MODULE_LOG_INFO << "[MCProtocol] Sending request: " << vectorToHexString(request);
 #endif
 
     // Send request frame to PLC
     if (send(m_socket_fd, (char*)request.data(), request.size(), 0) == SOCKET_ERROR) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "Failed to send request";
+        MODULE_LOG_ERROR << "Failed to send request";
 #else
         throw std::runtime_error("Failed to send request");
 #endif
@@ -285,12 +292,12 @@ bool MCProtocol::writeWords(const std::string& device, uint32_t start_addr, cons
     int bytes_received = recv(m_socket_fd, (char*)response.data(), response.size(), 0);
 
 #ifdef ENABLE_LOG
-        LOG_INFO << "[MCProtocol] Received response: " << vectorToHexString(response);
+        MODULE_LOG_INFO << "[MCProtocol] Received response: " << vectorToHexString(response);
 #endif
 
     if (bytes_received <= 0) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "Failed to receive response";
+        MODULE_LOG_ERROR << "Failed to receive response";
 #else
         throw std::runtime_error("Failed to receive response");
 #endif
@@ -299,7 +306,7 @@ bool MCProtocol::writeWords(const std::string& device, uint32_t start_addr, cons
     // Validate response frame
     if (response[0] != RESP_BATCH_WRITE_WORD) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "Invalid response header";
+        MODULE_LOG_ERROR << "Invalid response header";
 #else
         throw std::runtime_error("Invalid response header");
 #endif
@@ -308,7 +315,7 @@ bool MCProtocol::writeWords(const std::string& device, uint32_t start_addr, cons
     // Check completion code (0x00 = success)
     if (response[1] != 0x00) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "PLC returned error code: " << std::to_string(response[1]);
+        MODULE_LOG_ERROR << "PLC returned error code: " << std::to_string(response[1]);
 #else
         throw std::runtime_error("PLC returned error code: " + std::to_string(response[1]));
 #endif
@@ -322,7 +329,7 @@ std::vector<uint16_t> MCProtocol::readBits(const std::string& device, uint32_t s
     // Check connection status
     if (!m_is_connected) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "Not connected to PLC";
+        MODULE_LOG_ERROR << "Not connected to PLC";
 #else
         throw std::runtime_error("Not connected to PLC");
 #endif
@@ -356,13 +363,13 @@ std::vector<uint16_t> MCProtocol::readBits(const std::string& device, uint32_t s
     request.push_back((word_count >> 8) & 0xFF);          // High byte
 
 #ifdef ENABLE_LOG
-    LOG_INFO << "[MCProtocol] Sending request: " << vectorToHexString(request);
+    MODULE_LOG_INFO << "[MCProtocol] Sending request: " << vectorToHexString(request);
 #endif
 
     // Send request frame to PLC
     if (send(m_socket_fd, (char*)request.data(), request.size(), 0) == SOCKET_ERROR) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "Failed to send request";
+        MODULE_LOG_ERROR << "Failed to send request";
 #else
         throw std::runtime_error("Failed to send request");
 #endif
@@ -373,12 +380,12 @@ std::vector<uint16_t> MCProtocol::readBits(const std::string& device, uint32_t s
     int bytes_received = recv(m_socket_fd, (char*)response.data(), response.size(), 0);
 
 #ifdef ENABLE_LOG
-    LOG_INFO << "[MCProtocol] Received response: " << vectorToHexString(response);
+    MODULE_LOG_INFO << "[MCProtocol] Received response: " << vectorToHexString(response);
 #endif
 
     if (bytes_received <= 0) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "Failed to receive response";
+        MODULE_LOG_ERROR << "Failed to receive response";
 #else
         throw std::runtime_error("Failed to receive response");
 #endif
@@ -387,7 +394,7 @@ std::vector<uint16_t> MCProtocol::readBits(const std::string& device, uint32_t s
     // Validate response frame
     if (response[0] != RESP_BATCH_READ_WORD) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "Invalid response header";
+        MODULE_LOG_ERROR << "Invalid response header";
 #else
         throw std::runtime_error("Invalid response header");
 #endif
@@ -396,7 +403,7 @@ std::vector<uint16_t> MCProtocol::readBits(const std::string& device, uint32_t s
     // Check completion code (0x00 = success)
     if (response[1] != 0x00) {
 #ifdef ENABLE_LOG
-        LOG_ERROR << "PLC returned error code: " << std::to_string(response[1]);
+        MODULE_LOG_ERROR << "PLC returned error code: " << std::to_string(response[1]);
 #else
         throw std::runtime_error("PLC returned error code: " + std::to_string(response[1]));
 #endif
@@ -411,7 +418,7 @@ std::vector<uint16_t> MCProtocol::readBits(const std::string& device, uint32_t s
     }
 
 #ifdef ENABLE_LOG
-    LOG_INFO << "[MCProtocol] Received data: " << vectorToHexString(result);
+    MODULE_LOG_INFO << "[MCProtocol] Received data: " << vectorToHexString(result);
 #endif
 
     return result;
@@ -456,7 +463,7 @@ uint16_t MCProtocol::getDeviceCode(const std::string& device) {
     
     // Unsupported device type
 #ifdef ENABLE_LOG
-    LOG_ERROR << "Unsupported device type: " << device;
+    MODULE_LOG_ERROR << "Unsupported device type: " << device;
 #else
     throw std::runtime_error("Unsupported device type: " + device);
 #endif

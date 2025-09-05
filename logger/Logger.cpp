@@ -12,48 +12,67 @@
 #include <unistd.h>
 #include <signal.h>
 
-// Constants for log management
-const unsigned int DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB mặc định
-const unsigned int DEFAULT_MAX_FILE_COUNT = 5;  // Giữ tối đa 5 file
+// Constants
+const unsigned int DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024;
+const unsigned int DEFAULT_MAX_FILE_COUNT = 5;
 const std::string LOG_FILE_PREFIX = "trace_";
 const std::string LOG_FILE_SUFFIX = ".dlt";
 
-// LogStream implementation
-LogStream::LogStream(Logger& logger, LogLevel level, int line, const char* function)
-    : m_logger_ref(logger), level(level), m_line(line), m_function(function) {}
-
-// // Compatibility constructor
-// LogStream::LogStream(Logger& logger, LogLevel level, int line, const char* function)
-//     : m_logger_ref(logger), level(level), m_line(line), m_function(function) {}
-
-LogStream::~LogStream() {
-    m_logger_ref.log(level, m_line, m_function, m_stream.str());
+// ========== ModuleLogger Implementation ==========
+ModuleLogger::ModuleLogger(const std::string& app_id, const std::string& default_context)
+    : m_app_id(app_id), m_default_context(default_context.empty() ? "DEFAULT" : default_context) {
 }
 
-// DLTLogger implementation
+void ModuleLogger::setDefaultContext(const std::string& context) {
+    m_default_context = context;
+}
+
+ModuleLogger::LogStream ModuleLogger::info(int line, const char* function, const std::string& context) {
+    return LogStream(m_app_id, 
+                     context.empty() ? m_default_context : context,
+                     LOG_LEVEL_INFO, line, function);
+}
+
+ModuleLogger::LogStream ModuleLogger::warning(int line, const char* function, const std::string& context) {
+    return LogStream(m_app_id,
+                     context.empty() ? m_default_context : context,
+                     LOG_LEVEL_WARNING, line, function);
+}
+
+ModuleLogger::LogStream ModuleLogger::error(int line, const char* function, const std::string& context) {
+    return LogStream(m_app_id,
+                     context.empty() ? m_default_context : context,
+                     LOG_LEVEL_ERROR, line, function);
+}
+
+// ========== ModuleLogger::LogStream Implementation ==========
+ModuleLogger::LogStream::LogStream(const std::string& app_id, const std::string& context,
+                                    LogLevel level, int line, const char* function)
+    : m_app_id(app_id), m_context(context), m_level(level), 
+      m_line(line), m_function(function) {
+}
+
+ModuleLogger::LogStream::~LogStream() {
+    Logger::get_instance().log(m_level, m_line, m_function, 
+                                m_stream.str(), m_app_id, m_context);
+}
+
+// ========== Logger Implementation ==========
 Logger::Logger() 
-    : m_current_app("DEFAULT"),
-      m_offline_logging_enabled(true),
+    : m_offline_logging_enabled(true),
       m_max_file_size(DEFAULT_MAX_FILE_SIZE),
       m_max_file_count(DEFAULT_MAX_FILE_COUNT),
       m_log_directory("./logger/log/"),
       m_dlt_receiver_pid(0) {
     
-    // Tạo thư mục log mặc định
     create_directory_if_not_exists(m_log_directory);
-    
-    // Cấu hình DLT để ghi log offline
     init_dlt_with_file_logging();
-    
-    // Đăng ký context mặc định
     DLT_REGISTER_CONTEXT(default_context, "DEF", "Default Context");
 }
 
 Logger::~Logger() {
-    // Dừng dlt-receive nếu đang chạy
     stop_dlt_receiver();
     
-    // Hủy đăng ký tất cả app và context đã quản lý
     for (auto& app_pair : m_apps) {
         for (auto& ctx_pair : app_pair.second->contexts) {
             dlt_unregister_context(ctx_pair.second);
@@ -74,9 +93,8 @@ Logger& Logger::get_instance() {
 bool Logger::register_app(const std::string& app_id, const std::string& app_description) {
     std::lock_guard<std::mutex> lock(m_mutex);
     
-    // Kiểm tra nếu app đã tồn tại
     if (m_apps.find(app_id) != m_apps.end()) {
-        return false;
+        return false;  // Already registered
     }
     
     if (dlt_register_app(app_id.c_str(), app_description.c_str()) != DLT_RETURN_OK) {
@@ -87,26 +105,34 @@ bool Logger::register_app(const std::string& app_id, const std::string& app_desc
     AppContext* app = new AppContext();
     app->app_id = app_id;
     app->app_description = app_description;
+    app->default_context = "DEFAULT";
     
     m_apps[app_id] = app;
-    
-    if (m_apps.size() == 1) {
-        m_current_app = app_id;
-    }
+    m_last_registered_app = app_id;  // Lưu lại app vừa đăng ký
     
     return true;
 }
 
-bool Logger::register_context(const std::string& context_id, const std::string& context_description) {
+bool Logger::register_context(const std::string& context_id, const std::string& context_description,
+                               const std::string& app_id) {
     std::lock_guard<std::mutex> lock(m_mutex);
     
-    auto app_it = m_apps.find(m_current_app);
+    // Sử dụng app_id được truyền vào hoặc app được đăng ký gần nhất
+    std::string target_app = app_id.empty() ? m_last_registered_app : app_id;
+    
+    if (target_app.empty()) {
+        std::cerr << "Logger Error: No app registered yet" << std::endl;
+        return false;
+    }
+    
+    auto app_it = m_apps.find(target_app);
     if (app_it == m_apps.end()) {
+        std::cerr << "Logger Error: App not found: " << target_app << std::endl;
         return false;
     }
     
     if (app_it->second->contexts.find(context_id) != app_it->second->contexts.end()) {
-        return false;
+        return false;  // Context already exists
     }
     
     DltContext* new_context = new DltContext();
@@ -122,44 +148,39 @@ bool Logger::register_context(const std::string& context_id, const std::string& 
     
     app_it->second->contexts[context_id] = new_context;
     
+    // Set as default context if it's the first one
     if (app_it->second->contexts.size() == 1) {
-        app_it->second->current_context = context_id;
+        app_it->second->default_context = context_id;
     }
     
     return true;
 }
 
-void Logger::set_current_app(const std::string& app_id) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_apps.find(app_id) != m_apps.end()) {
-        m_current_app = app_id;
-    }
-}
-
-void Logger::set_current_context(const std::string& context_id) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    auto app_it = m_apps.find(m_current_app);
-    if (app_it != m_apps.end()) {
-        if (app_it->second->contexts.find(context_id) != app_it->second->contexts.end()) {
-            app_it->second->current_context = context_id;
-        }
-    }
-}
-
-void Logger::log(LogLevel level, int line, const char* function, const std::string& message) {
+void Logger::log(LogLevel level, int line, const char* function, 
+                 const std::string& message,
+                 const std::string& app_id,
+                 const std::string& context_id) {
     std::lock_guard<std::mutex> lock(m_mutex);
     
     DltContext* ctx_ptr = nullptr;
     
-    auto app_it = m_apps.find(m_current_app);
-    if (app_it != m_apps.end() && !app_it->second->current_context.empty()) {
-        auto ctx_it = app_it->second->contexts.find(app_it->second->current_context);
+    // Find the appropriate DLT context
+    auto app_it = m_apps.find(app_id);
+    if (app_it != m_apps.end()) {
+        // Try to find the specific context
+        auto ctx_it = app_it->second->contexts.find(context_id);
         if (ctx_it != app_it->second->contexts.end()) {
             ctx_ptr = ctx_it->second;
+        } else {
+            // Use default context of the app if specific context not found
+            ctx_it = app_it->second->contexts.find(app_it->second->default_context);
+            if (ctx_it != app_it->second->contexts.end()) {
+                ctx_ptr = ctx_it->second;
+            }
         }
     }
     
-    // Nếu không tìm thấy context hợp lệ, sử dụng context mặc định
+    // Use default context if no suitable context found
     if (!ctx_ptr) {
         ctx_ptr = &default_context;
     }
@@ -167,27 +188,26 @@ void Logger::log(LogLevel level, int line, const char* function, const std::stri
     DltLogLevelType dlt_level = static_cast<DltLogLevelType>(level);
     std::string thread_id = get_thread_id();
     
-    // Ghi log vào DLT (sẽ được ghi vào file .dlt nếu dlt-receive đang chạy)
+    // Log to DLT
     DLT_LOG(*ctx_ptr, dlt_level, 
         DLT_STRING(message.c_str()),
         DLT_STRING("func"), DLT_STRING(function),
         DLT_STRING("line"), DLT_INT(line),
-        DLT_STRING("tid"), DLT_STRING(thread_id.c_str())
+        DLT_STRING("tid"), DLT_STRING(thread_id.c_str()),
+        DLT_STRING("app"), DLT_STRING(app_id.c_str()),
+        DLT_STRING("ctx"), DLT_STRING(context_id.c_str())
     );
     
-    // Kiểm tra và rotate file nếu cần
     rotate_log_file();
 }
 
 void Logger::set_log_directory(const std::string& path) {
     std::lock_guard<std::mutex> lock(m_mutex);
     
-    // Dừng dlt-receive hiện tại nếu đang chạy
     stop_dlt_receiver();
     
     m_log_directory = path;
     
-    // Xóa dấu gạch chéo ở cuối nếu có
     if (!m_log_directory.empty() && m_log_directory.back() == '/') {
         m_log_directory.pop_back();
     }
@@ -195,7 +215,6 @@ void Logger::set_log_directory(const std::string& path) {
     if (!m_log_directory.empty()) {
         create_directory_if_not_exists(m_log_directory);
         
-        // Khởi động lại dlt-receive với thư mục mới
         if (m_offline_logging_enabled) {
             start_dlt_receiver();
         }
@@ -269,62 +288,45 @@ void Logger::init_dlt_with_file_logging() {
         return;
     }
     
-    // Đăng ký app với DLT daemon
     DLT_REGISTER_APP("DEFAULT", "Default DLT Application");
-    
-    // Set log mode 
     dlt_set_log_mode(DLT_USER_MODE_BOTH);
-    
-    // Enable verbose mode
     dlt_verbose_mode();
     
-    // Tự động khởi động dlt-receive để capture log vào folder được chỉ định
     start_dlt_receiver();
-    
-    // Dọn dẹp các file log cũ trong thư mục
     cleanup_old_logs();
 }
 
 void Logger::start_dlt_receiver() {
-    // Kiểm tra xem dlt-receive đã chạy chưa
     if (m_dlt_receiver_pid > 0) {
         if (kill(m_dlt_receiver_pid, 0) == 0) {
-            return; // Process vẫn đang chạy
+            return;
         }
     }
     
-    // Tạo tên file log với timestamp
     m_current_trace_file = m_log_directory + "/" + generate_trace_filename();
     
-    // Fork process để chạy dlt-receive
     m_dlt_receiver_pid = fork();
     
     if (m_dlt_receiver_pid == 0) {
-        // Child process: chạy dlt-receive
         freopen("/dev/null", "w", stdout);
         freopen("/dev/null", "w", stderr);
         
-        // Thử nhiều vị trí khác nhau của dlt-receive
         execl("/usr/bin/dlt-receive", "dlt-receive",
               "-o", m_current_trace_file.c_str(),
               "localhost", 
               nullptr);
               
-        // Nếu không tìm thấy ở /usr/bin, thử /usr/local/bin
         execl("/usr/local/bin/dlt-receive", "dlt-receive",
               "-o", m_current_trace_file.c_str(),
               "localhost", 
               nullptr);
         
-        // Nếu execl thất bại
         exit(1);
     } else if (m_dlt_receiver_pid > 0) {
-        // Parent process
         std::cout << "Logger Info: Started dlt-receive (PID: " << m_dlt_receiver_pid 
                   << ") writing to: " << m_current_trace_file << std::endl;
-        usleep(100000); // 100ms
+        usleep(100000);
     } else {
-        // Fork failed
         std::cerr << "Logger Warning: Failed to start dlt-receive. "
                   << "Please run manually: dlt-receive -o " << m_current_trace_file 
                   << " localhost" << std::endl;
@@ -344,18 +346,12 @@ void Logger::stop_dlt_receiver() {
 }
 
 void Logger::rotate_log_file() {
-    // Kiểm tra kích thước file hiện tại
     struct stat file_stat;
     if (stat(m_current_trace_file.c_str(), &file_stat) == 0) {
         if (static_cast<unsigned int>(file_stat.st_size) > m_max_file_size) {
-            // Dừng dlt-receive hiện tại
             stop_dlt_receiver();
-            
-            // Tạo file mới và khởi động lại dlt-receive
             m_current_trace_file = m_log_directory + "/" + generate_trace_filename();
             start_dlt_receiver();
-            
-            // Dọn dẹp file cũ
             cleanup_old_logs();
         }
     }
@@ -380,7 +376,6 @@ void Logger::cleanup_old_logs() {
         return;
     }
     
-    // Nếu số lượng file vượt quá giới hạn, xóa các file cũ nhất
     if (log_files.size() > m_max_file_count) {
         std::sort(log_files.begin(), log_files.end());
         

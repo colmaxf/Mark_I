@@ -11,9 +11,9 @@
 #include <thread>
 #include <memory>
 
-#include "./config.h"
+#include "../config.h"
 #ifdef ENABLE_LOG
-#include "./logger/Logger.h"
+#include "../logger/Logger.h"
 #endif
 
 // Cấu trúc điểm 2D với timestamp
@@ -203,6 +203,8 @@ public:
     void pauseProcessing();
     void resumeProcessing();
     void resetStatistics();
+    // Module logger - TỰ ĐỘNG QUẢN LÝ APP_ID
+    DECLARE_MODULE_LOGGER()
     
 private:
     // Main processing loop

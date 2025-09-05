@@ -544,23 +544,21 @@ int main() {
     // Initialize logger
 // Lấy instance duy nhất của Logger (singleton)
     Logger& logger = Logger::get_instance();
+    logger.set_log_directory("./logs");
+    logger.set_max_file_size(10 * 1024 * 1024);  // 10MB
+    logger.set_max_file_count(5);                 // Giữ tối đa 5 file
+    logger.enable_offline_logging(false);
     
-    // Cấu hình Logger (chỉ cần làm 1 lần trong main)
-    logger.set_log_directory("./logs");           // Thư mục lưu file log
-    logger.set_max_file_size(10 * 1024 * 1024);  // 10MB mỗi file
-    logger.set_max_file_count(5);                // Giữ tối đa 5 file
-    logger.enable_offline_logging(true);          // Bật ghi log offline
+    // // Đăng ký App ID cho main
+    // LOG_REGISTER_APP("MAIN", "Main Application");
     
-    // Đăng ký App ID cho main
-    LOG_REGISTER_APP("MAIN", "Main Application");
+    // // Đăng ký các context cho main
+    // LOG_REGISTER_CONTEXT("INIT", "Initialization Context");
+    // LOG_REGISTER_CONTEXT("PROC", "Processing Context");
     
-    // Đăng ký các context cho main
-    LOG_REGISTER_CONTEXT("INIT", "Initialization Context");
-    LOG_REGISTER_CONTEXT("PROC", "Processing Context");
-    
-    // Set app và context hiện tại
-    LOG_SET_APP("MAIN");
-    LOG_SET_CONTEXT("[Main Thread]");
+    // // Set app và context hiện tại
+    // LOG_SET_APP("MAIN");
+    // LOG_SET_CONTEXT("[Main Thread]");
     LOG_INFO << "[Main Thread] System initialized";
 #endif
 
