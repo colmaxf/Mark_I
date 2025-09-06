@@ -10,6 +10,12 @@
 using namespace std;
 using namespace chrono;
 
+/**
+ * @brief Lọc dữ liệu điểm LiDAR thô để loại bỏ nhiễu.
+ * @param raw_points Vector chứa các điểm LiDAR thô cần được lọc.
+ * @return Vector chứa các điểm LiDAR đã được lọc và làm sạch.
+ * @details Quá trình lọc bao gồm 3 bước: lọc cơ bản, làm mịn bước nhảy góc và loại bỏ điểm ngoại lai.
+ */
 // === NoiseFilter Implementation ===
 vector<LidarPoint> NoiseFilter::filter(const vector<LidarPoint>& raw_points) {
     if (raw_points.empty()) return {};
@@ -17,7 +23,7 @@ vector<LidarPoint> NoiseFilter::filter(const vector<LidarPoint>& raw_points) {
     vector<LidarPoint> filtered_points;
     filtered_points.reserve(raw_points.size());
     
-    // Bước 1: Lọc theo khoảng cách và cường độ cơ bản
+    // Bước 1: Lọc cơ bản theo khoảng cách (min/max) và cường độ tín hiệu tối thiểu.
     for (const auto& point : raw_points) {
         if (point.distance >= min_distance && 
             point.distance <= max_distance && 
@@ -26,15 +32,21 @@ vector<LidarPoint> NoiseFilter::filter(const vector<LidarPoint>& raw_points) {
         }
     }
     
-    // Bước 2: Loại bỏ các điểm gây ra bước nhảy góc đột ngột
+    // Bước 2: Loại bỏ các điểm gây ra sự thay đổi góc quá lớn so với điểm liền trước.
     filtered_points = smoothAngularJumps(filtered_points);
     
-    // Bước 3: Loại bỏ các điểm ngoại lai
+    // Bước 3: Loại bỏ các điểm ngoại lai dựa trên khoảng cách với các điểm lân cận.
     filtered_points = removeOutliers(filtered_points);
     
     return filtered_points;
 }
 
+/**
+ * @brief Loại bỏ các điểm ngoại lai (outliers) khỏi tập hợp điểm.
+ * @param points Vector chứa các điểm đã qua lọc sơ bộ.
+ * @return Vector chứa các điểm đã được loại bỏ outlier.
+ * @details Một điểm được coi là hợp lệ nếu nó có đủ số lượng lân cận trong một phạm vi góc nhỏ.
+ */
 vector<LidarPoint> NoiseFilter::removeOutliers(const vector<LidarPoint>& points) const {
     if (points.size() < 3) return points;
     
@@ -45,6 +57,7 @@ vector<LidarPoint> NoiseFilter::removeOutliers(const vector<LidarPoint>& points)
         const auto& current = points[i];
         vector<LidarPoint> neighbors;
         
+        // Tìm các điểm lân cận trong một phạm vi góc nhỏ (0.1 radian).
         for (size_t j = 0; j < points.size(); j++) {
             if (i == j) continue;
             float angle_diff = abs(current.angle - points[j].angle);
@@ -61,6 +74,12 @@ vector<LidarPoint> NoiseFilter::removeOutliers(const vector<LidarPoint>& points)
     return cleaned_points;
 }
 
+/**
+ * @brief Làm mịn dữ liệu bằng cách loại bỏ các điểm có bước nhảy góc lớn.
+ * @param points Vector chứa các điểm đầu vào.
+ * @return Vector chứa các điểm đã được làm mịn.
+ * @details Hàm này duyệt qua các điểm và chỉ giữ lại những điểm mà sự thay đổi về góc so với điểm trước đó nhỏ hơn ngưỡng `max_angle_jump`.
+ */
 vector<LidarPoint> NoiseFilter::smoothAngularJumps(const vector<LidarPoint>& points) const {
     if (points.size() < 2) return points;
     
@@ -69,6 +88,7 @@ vector<LidarPoint> NoiseFilter::smoothAngularJumps(const vector<LidarPoint>& poi
     smoothed_points.push_back(points[0]);
     
     for (size_t i = 1; i < points.size(); i++) {
+        // Tính sự khác biệt tuyệt đối về góc giữa điểm hiện tại và điểm trước đó.
         float angle_diff = abs(points[i].angle - points[i-1].angle);
         if (angle_diff < max_angle_jump) {
             smoothed_points.push_back(points[i]);
@@ -78,27 +98,43 @@ vector<LidarPoint> NoiseFilter::smoothAngularJumps(const vector<LidarPoint>& poi
     return smoothed_points;
 }
 
+/**
+ * @brief Kiểm tra xem một điểm có phải là điểm hợp lệ hay không dựa trên các điểm lân cận.
+ * @param point Điểm cần kiểm tra.
+ * @param neighbors Vector các điểm lân cận của `point`.
+ * @return `true` nếu điểm hợp lệ, ngược lại `false`.
+ * @details Một điểm được coi là hợp lệ nếu có đủ số lân cận (`min_neighbors`) và khoảng cách trung bình tới các lân cận đó nhỏ hơn một ngưỡng nhất định (0.5m).
+ */
 bool NoiseFilter::isPointValid(const LidarPoint& point, 
                               const vector<LidarPoint>& neighbors) const {
+    // Nếu không có đủ số lượng lân cận, coi như là điểm nhiễu.
     if (neighbors.size() < min_neighbors) return false;
     
     float avg_distance = 0;
     for (const auto& neighbor : neighbors) {
+        // Tính khoảng cách Euclidean giữa điểm đang xét và lân cận.
         float dx = point.x - neighbor.x;
         float dy = point.y - neighbor.y;
         avg_distance += sqrt(dx*dx + dy*dy);
     }
+    // Tính khoảng cách trung bình tới các lân cận.
     avg_distance /= neighbors.size();
     
+    // Nếu khoảng cách trung bình nhỏ hơn ngưỡng, điểm được coi là hợp lệ.
     return avg_distance < 0.5f;
 }
 
 // === LidarBuffer Implementation ===
+/**
+ * @brief Thêm một LidarScan mới vào bộ đệm.
+ * @param scan Đối tượng LidarScan để thêm vào.
+ * @details Hàm này thread-safe. Nó cũng tự động gán ID cho scan và quản lý kích thước bộ đệm.
+ */
 void LidarBuffer::addScan(const LidarScan& scan) {
     lock_guard<mutex> lock(buffer_mutex);
     
     LidarScan new_scan = scan;
-    new_scan.scan_id = next_scan_id++;
+    new_scan.scan_id = next_scan_id++; // Gán ID duy nhất và tăng biến đếm.
     
     scan_buffer.push_back(new_scan);
     
@@ -107,17 +143,29 @@ void LidarBuffer::addScan(const LidarScan& scan) {
     }
 }
 
+/**
+ * @brief Lấy scan gần nhất từ bộ đệm.
+ * @return Đối tượng LidarScan gần nhất. Trả về scan rỗng nếu bộ đệm trống.
+ * @details Hàm này thread-safe.
+ */
 LidarScan LidarBuffer::getLatestScan() const {
     lock_guard<mutex> lock(buffer_mutex);
     if (scan_buffer.empty()) return LidarScan();
     return scan_buffer.back();
 }
 
+/**
+ * @brief Lấy một số lượng các scan gần đây nhất.
+ * @param count Số lượng scan muốn lấy.
+ * @return Vector chứa các đối tượng LidarScan.
+ * @details Hàm này thread-safe.
+ */
 vector<LidarScan> LidarBuffer::getRecentScans(int count) const {
     lock_guard<mutex> lock(buffer_mutex);
     vector<LidarScan> recent_scans;
     
-    int start_index = max(0, (int)scan_buffer.size() - count);
+    // Tính toán chỉ số bắt đầu để không truy cập ngoài phạm vi.
+    int start_index = max(0, (int)scan_buffer.size() - count); 
     for (int i = start_index; i < (int)scan_buffer.size(); i++) {
         recent_scans.push_back(scan_buffer[i]);
     }
@@ -125,20 +173,34 @@ vector<LidarScan> LidarBuffer::getRecentScans(int count) const {
     return recent_scans;
 }
 
+/**
+ * @brief Lấy kích thước hiện tại của bộ đệm.
+ * @return Số lượng scan trong bộ đệm.
+ */
 size_t LidarBuffer::size() const {
     lock_guard<mutex> lock(buffer_mutex);
     return scan_buffer.size();
 }
 
+/**
+ * @brief Xóa toàn bộ dữ liệu trong bộ đệm.
+ */
 void LidarBuffer::clear() {
     lock_guard<mutex> lock(buffer_mutex);
     scan_buffer.clear();
     next_scan_id = 0;
 }
 
+/**
+ * @brief Tìm kiếm và lấy scan dựa trên timestamp.
+ * @param timestamp Dấu thời gian (ms) của scan cần tìm.
+ * @return LidarScan tìm thấy. Trả về scan rỗng nếu không tìm thấy.
+ * @details Tìm scan có timestamp gần nhất với giá trị đầu vào (sai số dưới 50ms).
+ */
 LidarScan LidarBuffer::getScanByTimestamp(long timestamp) const {
     lock_guard<mutex> lock(buffer_mutex);
     
+    // Duyệt qua bộ đệm để tìm scan có timestamp phù hợp.
     for (const auto& scan : scan_buffer) {
         if (abs(scan.timestamp - timestamp) < 50) {
             return scan;
@@ -147,6 +209,12 @@ LidarScan LidarBuffer::getScanByTimestamp(long timestamp) const {
     return LidarScan();
 }
 
+/**
+ * @brief Lấy tất cả các scan trong một khoảng thời gian.
+ * @param start_time Thời gian bắt đầu (ms).
+ * @param end_time Thời gian kết thúc (ms).
+ * @return Vector chứa các LidarScan trong khoảng thời gian đã cho.
+ */
 vector<LidarScan> LidarBuffer::getScansInTimeRange(long start_time, long end_time) const {
     lock_guard<mutex> lock(buffer_mutex);
     vector<LidarScan> range_scans;
@@ -160,26 +228,36 @@ vector<LidarScan> LidarBuffer::getScansInTimeRange(long start_time, long end_tim
 }
 
 // === RealtimeStabilizer Implementation ===
+/**
+ * @brief Cập nhật bộ ổn định với một frame điểm mới.
+ * @param new_points Vector các điểm LiDAR của frame mới.
+ * @return `true` nếu dữ liệu vừa chuyển sang trạng thái ổn định, ngược lại `false`.
+ * @details Hàm này quản lý một cửa sổ lịch sử các frame, tính toán các điểm ổn định, và kiểm tra tính ổn định qua nhiều frame.
+ */
 bool RealtimeStabilizer::update(const vector<LidarPoint>& new_points) {
     lock_guard<mutex> lock(stabilizer_mutex);
     
     if (new_points.empty()) return false;
     
+    // Thêm frame mới vào lịch sử và quản lý kích thước cửa sổ.
     point_history.push_back(new_points);
-    
     if (point_history.size() > history_window) {
         point_history.pop_front();
     }
     
+    // Cần ít nhất 3 frame trong lịch sử để bắt đầu đánh giá.
     if (point_history.size() < 3) {
         is_stable = false;
         return false;
     }
     
+    // Tính toán tập hợp điểm ổn định ứng viên từ lịch sử.
     vector<LidarPoint> candidate_stable = computeStabilizedPoints();
     
+    // Kiểm tra xem tập hợp ứng viên có ổn định so với tập hợp ổn định trước đó không.
     if (checkStability(candidate_stable)) {
         stable_frame_count++;
+        // Dữ liệu được coi là ổn định nếu nó ổn định trong 3 frame liên tiếp.
         if (stable_frame_count >= 3) {
             stable_points = candidate_stable;
             is_stable = true;
@@ -193,16 +271,30 @@ bool RealtimeStabilizer::update(const vector<LidarPoint>& new_points) {
     return false;
 }
 
+/**
+ * @brief Lấy tập hợp các điểm đã được ổn định.
+ * @return Vector các điểm LidarPoint đã ổn định.
+ * @details Hàm này thread-safe.
+ */
 vector<LidarPoint> RealtimeStabilizer::getStablePoints() const {
     lock_guard<mutex> lock(stabilizer_mutex);
     return stable_points;
 }
 
+/**
+ * @brief Kiểm tra xem dữ liệu hiện tại có đang ở trạng thái ổn định không.
+ * @return `true` nếu ổn định, ngược lại `false`.
+ */
 bool RealtimeStabilizer::isDataStable() const {
     lock_guard<mutex> lock(stabilizer_mutex);
     return is_stable;
 }
 
+/**
+ * @brief Tính toán và trả về một điểm số thể hiện mức độ ổn định của dữ liệu.
+ * @return Điểm số ổn định, từ 0.0 (không ổn định) đến 1.0 (rất ổn định).
+ * @details Điểm số được tính dựa trên phương sai (variance) trung bình của vị trí các điểm giữa các frame liên tiếp trong lịch sử.
+ */
 float RealtimeStabilizer::getStabilityScore() const {
     lock_guard<mutex> lock(stabilizer_mutex);
     if (point_history.size() < 2) return 0.0f;
@@ -210,10 +302,12 @@ float RealtimeStabilizer::getStabilityScore() const {
     float total_variance = 0.0f;
     int comparison_count = 0;
     
+    // So sánh từng frame với frame liền trước nó trong lịch sử.
     for (size_t i = 1; i < point_history.size(); i++) {
         const auto& prev = point_history[i-1];
         const auto& curr = point_history[i];
         
+        // So sánh các điểm tương ứng giữa hai frame.
         size_t min_size = min(prev.size(), curr.size());
         for (size_t j = 0; j < min_size; j++) {
             float dx = curr[j].x - prev[j].x;
@@ -224,14 +318,23 @@ float RealtimeStabilizer::getStabilityScore() const {
     }
     
     if (comparison_count == 0) return 0.0f;
+    // Tính phương sai trung bình.
     float avg_variance = total_variance / comparison_count;
     
+    // Chuyển đổi phương sai thành điểm số ổn định (phương sai càng thấp, điểm càng cao).
     return 1.0f / (1.0f + avg_variance * 100.0f);
 }
 
+/**
+ * @brief Tính toán các điểm ổn định bằng cách lấy trung bình các điểm trong lịch sử.
+ * @return Vector các điểm LidarPoint đã được làm trung bình và ổn định hóa.
+ * @details Các điểm từ tất cả các frame trong lịch sử được nhóm lại theo góc. Sau đó, các điểm trong cùng một nhóm góc sẽ được lấy trung bình để tạo ra một điểm ổn định duy nhất.
+ */
 vector<LidarPoint> RealtimeStabilizer::computeStabilizedPoints() {
     if (point_history.empty()) return {};
     
+    // Sử dụng map để nhóm các điểm theo khóa góc (angle_key).
+    // Khóa góc được tạo bằng cách nhân góc (độ) với 10 để tăng độ phân giải.
     map<int, vector<LidarPoint>> angle_groups; 
     
     for (const auto& frame : point_history) {
@@ -243,7 +346,9 @@ vector<LidarPoint> RealtimeStabilizer::computeStabilizedPoints() {
     
     vector<LidarPoint> stabilized;
     
+    // Duyệt qua từng nhóm góc.
     for (const auto& [angle_key, points] : angle_groups) {
+        // Bỏ qua nếu nhóm có quá ít điểm.
         if (points.size() < 2) continue;
         
         float sum_x = 0, sum_y = 0, sum_dist = 0;
@@ -251,6 +356,7 @@ vector<LidarPoint> RealtimeStabilizer::computeStabilizedPoints() {
         uint32_t sum_intensity = 0;
         long latest_timestamp = 0;
         
+        // Tính tổng các thuộc tính của các điểm trong nhóm.
         for (const auto& p : points) {
             sum_x += p.x;
             sum_y += p.y;
@@ -260,6 +366,7 @@ vector<LidarPoint> RealtimeStabilizer::computeStabilizedPoints() {
             latest_timestamp = max(latest_timestamp, p.timestamp);
         }
         
+        // Tính giá trị trung bình và tạo ra điểm ổn định.
         float inv_count = 1.0f / points.size();
         LidarPoint stabilized_point(
             sum_x * inv_count,
@@ -281,6 +388,11 @@ vector<LidarPoint> RealtimeStabilizer::computeStabilizedPoints() {
     return stabilized;
 }
 
+/**
+ * @brief Kiểm tra mức độ ổn định của một tập hợp điểm mới so với tập hợp điểm ổn định hiện tại.
+ * @param new_points Tập hợp điểm ứng viên mới.
+ * @return `true` nếu độ lệch trung bình nhỏ hơn ngưỡng `stability_threshold`, ngược lại `false`.
+ */
 bool RealtimeStabilizer::checkStability(const vector<LidarPoint>& new_points) {
     if (stable_points.empty()) return true;
     if (new_points.size() != stable_points.size()) return false;
@@ -288,7 +400,9 @@ bool RealtimeStabilizer::checkStability(const vector<LidarPoint>& new_points) {
     float total_deviation = 0.0f;
     int valid_comparisons = 0;
     
+    // So sánh từng điểm tương ứng giữa tập hợp mới và tập hợp ổn định cũ.
     for (size_t i = 0; i < min(new_points.size(), stable_points.size()); i++) {
+        // Tính độ lệch (khoảng cách Euclidean).
         float dx = new_points[i].x - stable_points[i].x;
         float dy = new_points[i].y - stable_points[i].y;
         float deviation = sqrt(dx*dx + dy*dy);
@@ -297,9 +411,13 @@ bool RealtimeStabilizer::checkStability(const vector<LidarPoint>& new_points) {
         valid_comparisons++;
     }
     
+    // Nếu không có điểm nào để so sánh, coi như không ổn định.
     if (valid_comparisons == 0) return false;
     
+    // Tính độ lệch trung bình.
     float avg_deviation = total_deviation / valid_comparisons;
+    
+    // So sánh với ngưỡng ổn định.
     return avg_deviation < stability_threshold;
 }
 
@@ -308,45 +426,49 @@ LidarProcessor::LidarProcessor(const string& local_ip, const string& local_port,
                                              const string& laser_ip, const string& laser_port)
     : local_ip(local_ip), local_port(local_port), laser_ip(laser_ip), laser_port(laser_port),
       is_running(false), is_processing(false), total_scans(0), valid_scans(0), 
-      stable_scans(0), average_points_per_scan(0), processing_rate(0) , INIT_MODULE_LOGGER("LIDAR") {
+      stable_scans(0), average_points_per_scan(0), processing_rate(0) /*,INIT_MODULE_LOGGER("LIDA")*/ {
     
-// Đăng ký App ID riêng cho LIDAR
-    LOG_REGISTER_APP("LIDAR", "Library for LiDAR Processing");
-
-    // Đăng ký các context cho LIDAR
-    LOG_REGISTER_CONTEXT("CORE", "Core LiDAR Functions");
-    m_logger.setDefaultContext("CORE");
-
+    #ifdef ENABLE_LOG
+         LOG_INFO << "[LIDAR-RT] LidarProcessor instance created.";
+    #else
+        std::cout << "[LIDAR-RT] LidarProcessor instance created." << std::endl;
+    #endif
     // Khởi tạo các thành phần xử lý
     noise_filter = make_unique<NoiseFilter>();
     data_buffer = make_unique<LidarBuffer>(100);
     stabilizer = make_unique<RealtimeStabilizer>();
 }
 
+/**
+ * @brief Hủy đối tượng LidarProcessor.
+ * @details Tự động gọi hàm stop() để đảm bảo luồng xử lý được dừng một cách an toàn.
+ */
 LidarProcessor::~LidarProcessor() {
     stop();
 }
 
 bool LidarProcessor::initialize() {
-    Logger& logger = Logger::get_instance();
     try {
         #ifdef ENABLE_LOG
-            MODULE_LOG_INFO  << "[LIDAR-RT] Initializing Realtime LiDAR System...";
-            MODULE_LOG_INFO  << "[LIDAR-RT] Local: " << local_ip << ":" << local_port;
-            MODULE_LOG_INFO  << "[LIDAR-RT] Laser: " << laser_ip << ":" << laser_port;
-        #else
+             LOG_INFO  << "[LIDAR-RT] Initializing Realtime LiDAR System...";
+             LOG_INFO  << "[LIDAR-RT] Local: " << local_ip << ":" << local_port;
+             LOG_INFO  << "[LIDAR-RT] Laser: " << laser_ip << ":" << laser_port;
+        #endif
             cout << "[LIDAR-RT] Initializing Realtime LiDAR System..." << endl;
             cout << "[LIDAR-RT] Local: " << local_ip << ":" << local_port << endl;
             cout << "[LIDAR-RT] Laser: " << laser_ip << ":" << laser_port << endl;
-        #endif
+        
         
         // Tạo đối tượng LakiBeamUDP
         lidar = make_unique<LakiBeamUDP>(local_ip, local_port, laser_ip, laser_port);
         
         // THÊM: Kiểm tra kết nối thực sự bằng cách thử lấy dữ liệu
-        cout << "[LIDAR-RT] Waiting for LiDAR data..." << endl;
-        
-        // Thử lấy dữ liệu trong vòng 5 giây
+        #ifdef ENABLE_LOG
+             LOG_INFO  << "[LIDAR-RT] Waiting for LiDAR data...";
+        #else
+            cout << "[LIDAR-RT] Waiting for LiDAR data..." << endl;
+        #endif
+        // Cố gắng lấy dữ liệu trong một khoảng thời gian chờ (timeout) để xác nhận kết nối.
         auto start_wait = chrono::steady_clock::now();
         const int timeout_seconds = 5;
         bool data_received = false;
@@ -354,10 +476,11 @@ bool LidarProcessor::initialize() {
         while (chrono::steady_clock::now() - start_wait < chrono::seconds(timeout_seconds)) {
             repark_t test_packet;
             if (lidar->get_repackedpack(test_packet)) {
+                // Kiểm tra xem gói dữ liệu nhận được có hợp lệ không.
                 if (test_packet.maxdots > 0 && test_packet.maxdots <= CONFIG_CIRCLE_DOTS) {
                     data_received = true;
 #ifdef ENABLE_LOG
-                    MODULE_LOG_INFO  << "[LIDAR-RT] LiDAR data received! Points: " << test_packet.maxdots;
+                     LOG_INFO  << "[LIDAR-RT] LiDAR data received! Points: " << test_packet.maxdots;
 #else
                     cout << "[LIDAR-RT] LiDAR data received! Points: " << test_packet.maxdots << endl;
 #endif
@@ -368,13 +491,14 @@ bool LidarProcessor::initialize() {
         }
         
         if (!data_received) {
+            // Nếu không nhận được dữ liệu sau khoảng thời gian chờ, báo lỗi và hướng dẫn người dùng.
 #ifdef ENABLE_LOG
-            MODULE_LOG_ERROR << "[LIDAR-RT] No data received from LiDAR after " << timeout_seconds << " seconds!";
-            MODULE_LOG_ERROR << "[LIDAR-RT] Please check: ";
-            MODULE_LOG_ERROR << "[LIDAR-RT]   1. LiDAR is powered on";
-            MODULE_LOG_ERROR << "[LIDAR-RT]   2. Network cable is connected";
-            MODULE_LOG_ERROR << "[LIDAR-RT]   3. IP addresses are correct";
-            MODULE_LOG_ERROR << "[LIDAR-RT]   4. Firewall is not blocking UDP port " << local_port;
+             LOG_ERROR << "[LIDAR-RT] No data received from LiDAR after " << timeout_seconds << " seconds!";
+             LOG_ERROR << "[LIDAR-RT] Please check: ";
+             LOG_ERROR << "[LIDAR-RT]   1. LiDAR is powered on";
+             LOG_ERROR << "[LIDAR-RT]   2. Network cable is connected";
+             LOG_ERROR << "[LIDAR-RT]   3. IP addresses are correct";
+             LOG_ERROR << "[LIDAR-RT]   4. Firewall is not blocking UDP port " << local_port;
 #else
             cerr << "[LIDAR-RT] ERROR: No data received from LiDAR after " << timeout_seconds << " seconds!" << endl;
             cerr << "[LIDAR-RT] Please check: " << endl;
@@ -389,7 +513,7 @@ bool LidarProcessor::initialize() {
         }
         
 #ifdef ENABLE_LOG
-        MODULE_LOG_INFO  << "[LIDAR-RT] Initialization successful! LiDAR is responding.";
+         LOG_INFO  << "[LIDAR-RT] Initialization successful! LiDAR is responding.";
 #else
         cout << "[LIDAR-RT] Initialization successful! LiDAR is responding." << endl;
 #endif
@@ -397,7 +521,7 @@ bool LidarProcessor::initialize() {
         
     } catch (const exception& e) {
 #ifdef ENABLE_LOG
-        MODULE_LOG_ERROR << "[LIDAR-RT] Initialization failed: " << e.what();
+         LOG_ERROR << "[LIDAR-RT] Initialization failed: " << e.what();
 #else
         cerr << "[LIDAR-RT] Initialization failed: " << e.what() << endl;
 #endif
@@ -408,7 +532,7 @@ bool LidarProcessor::initialize() {
 bool LidarProcessor::start() {
     if (!lidar) {
         #ifdef ENABLE_LOG
-            MODULE_LOG_ERROR << "[LIDAR-RT] LiDAR not initialized!";
+             LOG_ERROR << "[LIDAR-RT] LiDAR not initialized!";
         #else
             cout << "[LIDAR-RT]  LiDAR not initialized!" << endl;
         #endif
@@ -417,7 +541,7 @@ bool LidarProcessor::start() {
     
     if (is_running) {
 #ifdef ENABLE_LOG
-            MODULE_LOG_WARNING << "[LIDAR-RT] Already running!";
+             LOG_WARNING << "[LIDAR-RT] Already running!";
 #else
             cout << "[LIDAR-RT] ⚠️ Already running!" << endl;
 #endif
@@ -431,7 +555,7 @@ bool LidarProcessor::start() {
     processing_thread = make_unique<thread>(&LidarProcessor::processLidarData, this);
     
 #ifdef ENABLE_LOG
-        MODULE_LOG_INFO  << "[LIDAR-RT] Realtime processing started!";
+         LOG_INFO  << "[LIDAR-RT] Realtime processing started!";
 #else
         cout << "[LIDAR-RT] Realtime processing started!" << endl;
 #endif
@@ -442,7 +566,7 @@ void LidarProcessor::stop() {
     if (!is_running) return;
     
 #ifdef ENABLE_LOG
-        MODULE_LOG_INFO  << "[LIDAR-RT] Stopping realtime processing...";
+         LOG_INFO  << "[LIDAR-RT] Stopping realtime processing...";
 #else
         cout << "[LIDAR-RT] Stopping realtime processing..." << endl;
 #endif
@@ -458,16 +582,20 @@ void LidarProcessor::stop() {
     
     printStatus();
 #ifdef ENABLE_LOG
-        MODULE_LOG_INFO  << "[LIDAR-RT] Stopped successfully.";
+         LOG_INFO  << "[LIDAR-RT] Stopped successfully.";
 #else
         cout << "[LIDAR-RT] Stopped successfully." << endl;
 #endif
 }
 
+/**
+ * @brief Vòng lặp chính xử lý dữ liệu LiDAR.
+ * @details Hàm này chạy trong một luồng riêng, liên tục lấy dữ liệu từ LiDAR, xử lý (lọc, ổn định hóa), cập nhật trạng thái và gọi các callback.
+ */
 // Main processing loop - PHẦN QUAN TRỌNG NHẤT
 void LidarProcessor::processLidarData() {
 #ifdef ENABLE_LOG
-        MODULE_LOG_INFO  << "[LIDAR-RT] Processing thread started";
+         LOG_INFO  << "[LIDAR-RT] Processing thread started";
 #else
         cout << "[LIDAR-RT] Processing thread started" << endl;
 #endif
@@ -478,7 +606,7 @@ void LidarProcessor::processLidarData() {
             continue;
         }
         
-        // Lấy dữ liệu từ LiDAR SDK
+        // Lấy dữ liệu thô từ LakiBeam SDK.
         repark_t raw_packet;
         
         // Sử dụng get_repackedpack (non-blocking) để tránh block thread
@@ -490,22 +618,22 @@ void LidarProcessor::processLidarData() {
             continue;
         }
         
-        // Kiểm tra dữ liệu hợp lệ
+        // Kiểm tra sơ bộ tính hợp lệ của gói dữ liệu.
         if (raw_packet.maxdots == 0 || raw_packet.maxdots > CONFIG_CIRCLE_DOTS) {
             continue;
         }
         
-        // Chuyển đổi raw data sang điểm
+        // Bước 1: Chuyển đổi dữ liệu thô sang cấu trúc LidarPoint.
         vector<LidarPoint> raw_points = convertRawDataToPoints(raw_packet);
         
         if (raw_points.empty()) {
             continue;
         }
         
-        // Áp dụng noise filter
+        // Bước 2: Áp dụng bộ lọc nhiễu.
         vector<LidarPoint> filtered_points = noise_filter->filter(raw_points);
         
-        // Cập nhật stabilizer
+        // Bước 3: Cập nhật bộ ổn định hóa với dữ liệu đã lọc.
         bool became_stable = stabilizer->update(filtered_points);
         
         // Tạo scan object
@@ -514,7 +642,7 @@ void LidarProcessor::processLidarData() {
         // Thêm vào buffer
         data_buffer->addScan(scan);
         
-        // Cập nhật thống kê
+        // Bước 4: Cập nhật các chỉ số thống kê hiệu suất.
         total_scans++;
         if (!filtered_points.empty()) {
             valid_scans++;
@@ -523,12 +651,12 @@ void LidarProcessor::processLidarData() {
             stable_scans++;
         }
         
-        // Tính average points per scan
+        // Tính số điểm trung bình trên mỗi scan (sử dụng trung bình động).
         if (total_scans > 0) {
             average_points_per_scan = (average_points_per_scan * (total_scans - 1) + filtered_points.size()) / total_scans;
         }
         
-        // Gọi callbacks nếu có
+        // Bước 5: Gọi các hàm callback đã được đăng ký.
         {
             lock_guard<mutex> lock(callback_mutex);
             
@@ -548,7 +676,7 @@ void LidarProcessor::processLidarData() {
             }
         }
         
-        // Cập nhật processing rate
+        // Cập nhật tốc độ xử lý (Hz).
         updateProcessingRate();
         
         // Giảm tải CPU
@@ -556,12 +684,17 @@ void LidarProcessor::processLidarData() {
     }
     
 #ifdef ENABLE_LOG
-        MODULE_LOG_INFO  << "[LIDAR-RT] Processing thread stopped";
+         LOG_INFO  << "[LIDAR-RT] Processing thread stopped";
 #else
         cout << "[LIDAR-RT] Processing thread stopped" << endl;
 #endif
 }
 
+/**
+ * @brief Chuyển đổi dữ liệu thô từ cấu trúc `repark_t` sang vector các `LidarPoint`.
+ * @param pack Gói dữ liệu thô từ LiDAR SDK.
+ * @return Vector các điểm `LidarPoint`.
+ */
 // Chuyển đổi dữ liệu thô sang điểm
 vector<LidarPoint> LidarProcessor::convertRawDataToPoints(const repark_t& pack) {
     vector<LidarPoint> points;
@@ -572,25 +705,17 @@ vector<LidarPoint> LidarProcessor::convertRawDataToPoints(const repark_t& pack) 
     // Duyệt qua tất cả các điểm trong gói dữ liệu
     for (uint16_t i = 0; i < pack.maxdots; i++) {
         const cicle_pack_t& dot = pack.dotcloud[i];
-        float angle_deg = dot.angle / 100.0f;
-        // Chuyển đổi từ dữ liệu thô
-        // // Chuyển đổi góc (từ raw * 100 sang độ)
-        // float angle_deg = dot.angle / 100.0;
-        // angle đã ở dạng độ * 100 trong cicle_pack_t
+        // Dữ liệu góc trong `cicle_pack_t` là độ * 100.
         float angle = dot.angle / 100.0f * M_PI / 180.0f; // Chuyển sang radian
-        float distance = dot.distance / 1000.0f; // mm sang mét
+        float distance = dot.distance / 1000.0f; // Dữ liệu khoảng cách là mm, chuyển sang mét.
         uint16_t intensity = dot.rssi;
         
         // Bỏ qua các điểm không hợp lệ
         if (distance <= 0.001f || distance > 100.0f) {
             continue;
         }
-
-        
-
-
         // Chuyển sang tọa độ Cartesian
-        float x= distance * cos(angle);
+        float x = distance * cos(angle);
         float y = distance * sin(angle);
         
         points.emplace_back(x, y, distance, angle, intensity, timestamp);
@@ -599,6 +724,11 @@ vector<LidarPoint> LidarProcessor::convertRawDataToPoints(const repark_t& pack) 
     return points;
 }
 
+/**
+ * @brief Tạo một đối tượng LidarScan từ một vector điểm.
+ * @param points Vector các điểm LidarPoint.
+ * @return Đối tượng LidarScan.
+ */
 // Tạo scan từ điểm
 LidarScan LidarProcessor::createScanFromPoints(const vector<LidarPoint>& points) {
     LidarScan scan(getCurrentTimestamp());
@@ -606,6 +736,10 @@ LidarScan LidarProcessor::createScanFromPoints(const vector<LidarPoint>& points)
     return scan;
 }
 
+/**
+ * @brief Lấy timestamp hiện tại của hệ thống.
+ * @return Timestamp dưới dạng milliseconds kể từ epoch.
+ */
 // Utilities
 long LidarProcessor::getCurrentTimestamp() const {
     return chrono::duration_cast<chrono::milliseconds>(
@@ -613,6 +747,10 @@ long LidarProcessor::getCurrentTimestamp() const {
     ).count();
 }
 
+/**
+ * @brief Cập nhật tốc độ xử lý (scans per second).
+ * @details Tính toán tốc độ dựa trên thời gian trôi qua giữa lần xử lý này và lần xử lý trước.
+ */
 void LidarProcessor::updateProcessingRate() {
     auto now = high_resolution_clock::now();
     if (last_process_time.time_since_epoch().count() > 0) {
@@ -623,17 +761,20 @@ void LidarProcessor::updateProcessingRate() {
     last_process_time = now;
 }
 
+/**
+ * @brief In ra các thông tin trạng thái và hiệu suất của LidarProcessor.
+ */
 void LidarProcessor::printStatus() const {
 #ifdef ENABLE_LOG
-        // MODULE_LOG_INFO << "--- LiDAR Processor Status ---";
-        // MODULE_LOG_INFO << "Total Scans: " << total_scans.load();
-        // MODULE_LOG_INFO << "Valid Scans: " << valid_scans.load();
-        // MODULE_LOG_INFO << "Stable Scans: " << stable_scans.load();
-        // MODULE_LOG_INFO << "Processing Rate: " << processing_rate.load() << " Hz";
-        // MODULE_LOG_INFO << "Data Validity: " << getDataValidityRatio() * 100 << "%";
-        // MODULE_LOG_INFO << "Stability Score: " << getStabilityScore();
-        // MODULE_LOG_INFO << "Uptime: " << getUptime() << " seconds";
-        // MODULE_LOG_INFO << "-------------------------------";
+         LOG_INFO << "--- LiDAR Processor Status ---";
+         LOG_INFO << "Total Scans: " << total_scans.load();
+         LOG_INFO << "Valid Scans: " << valid_scans.load();
+         LOG_INFO << "Stable Scans: " << stable_scans.load();
+         LOG_INFO << "Processing Rate: " << processing_rate.load() << " Hz";
+         LOG_INFO << "Data Validity: " << getDataValidityRatio() * 100 << "%";
+         LOG_INFO << "Stability Score: " << getStabilityScore();
+         LOG_INFO << "Uptime: " << getUptime() << " seconds";
+         LOG_INFO << "-------------------------------";
 #else
             cout << "\n--- LiDAR Processor Status ---" << endl;
             cout << "Total Scans: " << total_scans.load() << endl;
@@ -647,6 +788,11 @@ void LidarProcessor::printStatus() const {
 #endif
 }
 
+/**
+ * @brief Kiểm tra tính hợp lệ của một gói dữ liệu thô.
+ * @param pack Gói dữ liệu `repark_t` cần kiểm tra.
+ * @return `true` nếu hợp lệ, ngược lại `false`.
+ */
 // Validation
 bool LidarProcessor::validateScanData(const repark_t& pack) const {
     // Kiểm tra số lượng điểm hợp lệ
@@ -662,6 +808,11 @@ bool LidarProcessor::validateScanData(const repark_t& pack) const {
     return true;
 }
 
+/**
+ * @brief Tiền xử lý các điểm thô (hiện tại chưa có logic, để dành cho mở rộng).
+ * @param raw_points Vector các điểm thô.
+ * @return Vector các điểm đã được tiền xử lý.
+ */
 vector<LidarPoint> LidarProcessor::preprocessPoints(const vector<LidarPoint>& raw_points) {
     // Có thể thêm preprocessing logic ở đây nếu cần
     return raw_points;

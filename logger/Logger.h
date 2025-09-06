@@ -1,191 +1,197 @@
 #ifndef LOGGER_H
 #define LOGGER_H
 
+#include <dlt/dlt.h>
 #include <string>
 #include <sstream>
-#include <mutex>
-#include <thread>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <errno.h>
-#include <cstring>
-#include <dlt/dlt.h>
-#include <map>
 #include <memory>
+#include <mutex>
+#include <unordered_map>
+#include <chrono>
+#include <ctime>
+#include <filesystem>
 #include <vector>
-#include <algorithm>
-#include <cstdio>
-#include <dirent.h>
-#include <unistd.h>
-#include <stack>
 
-enum LogLevel { 
-    LOG_LEVEL_INFO = DLT_LOG_INFO, 
-    LOG_LEVEL_WARNING = DLT_LOG_WARN, 
-    LOG_LEVEL_ERROR = DLT_LOG_ERROR 
+// Log levels matching DLT
+enum class LogLevel {
+    VERBOSE = DLT_LOG_VERBOSE,
+    DEBUG = DLT_LOG_DEBUG,
+    INFO = DLT_LOG_INFO,
+    WARNING = DLT_LOG_WARN,
+    ERROR = DLT_LOG_ERROR,
+    FATAL = DLT_LOG_FATAL
 };
 
+// Forward declaration
 class Logger;
 
-// ========== ModuleLogger Class ==========
-// Mỗi module (LibA, LibB) sẽ có một instance của ModuleLogger
-// để tự động quản lý app_id và context
-class ModuleLogger {
+// Log stream class for convenient << operator usage
+class LogStream {
 public:
-    ModuleLogger(const std::string& app_id, const std::string& default_context = "");
+    LogStream(Logger& logger, LogLevel level, const char* file, int line);
+    ~LogStream();
     
-    // Set context mặc định cho module
-    void setDefaultContext(const std::string& context);
-    
-    // Tạo LogStream với app_id và context của module
-    class LogStream {
-    public:
-        LogStream(const std::string& app_id, const std::string& context, 
-                  LogLevel level, int line, const char* function);
-        ~LogStream();
-        
-        template <typename T>
-        LogStream& operator<<(const T& value) {
-            m_stream << value;
-            return *this;
-        }
-        
-    private:
-        std::string m_app_id;
-        std::string m_context;
-        LogLevel m_level;
-        int m_line;
-        const char* m_function;
-        std::stringstream m_stream;
-    };
-    
-    // Helper methods để tạo LogStream
-    LogStream info(int line, const char* function, const std::string& context = "");
-    LogStream warning(int line, const char* function, const std::string& context = "");
-    LogStream error(int line, const char* function, const std::string& context = "");
+    template<typename T>
+    LogStream& operator<<(const T& value) {
+        buffer_ << value;
+        return *this;
+    }
     
 private:
-    std::string m_app_id;
-    std::string m_default_context;
+    Logger& logger_;
+    LogLevel level_;
+    std::stringstream buffer_;
+    const char* file_;
+    int line_;
 };
 
-// ========== Main Logger Class (Singleton) ==========
+// Module logger wrapper for automatic context management
+class ModuleLogger {
+public:
+    ModuleLogger(const std::string& app_id);
+    
+    void setDefaultContext(const std::string& context_id);
+    LogStream log(LogLevel level, const char* file, int line);
+    
+private:
+    std::string app_id_;
+    std::string default_context_;
+};
+
+// Main Logger class - Singleton pattern
 class Logger {
 public:
+    // Singleton access
     static Logger& get_instance();
     
-    // Đăng ký app và context
-    bool register_app(const std::string& app_id, const std::string& app_description);
-    bool register_context(const std::string& context_id, const std::string& context_description, 
-                         const std::string& app_id = "");
+    // Delete copy constructor and assignment operator
+    Logger(const Logger&) = delete;
+    Logger& operator=(const Logger&) = delete;
     
-    // Log với app_id và context cụ thể
-    void log(LogLevel level, int line, const char* function, 
-             const std::string& message,
-             const std::string& app_id,
-             const std::string& context_id);
+    // Application and context registration
+    bool register_app(const std::string& app_id, const std::string& description);
+    bool register_context(const std::string& app_id, const std::string& context_id, const std::string& description);
+    
+    // Logging functions
+    void log(const std::string& app_id, const std::string& context_id, 
+             LogLevel level, const std::string& message,
+             const char* file = nullptr, int line = 0);
     
     // Configuration
-    void set_log_directory(const std::string& path);
+    void set_log_directory(const std::string& dir);
+    void set_max_file_count(int count);
+    void set_max_file_size(size_t size_mb);
     void enable_offline_logging(bool enable);
-    void set_max_file_size(unsigned int size);
-    void set_max_file_count(unsigned int count);
+    void enable_network_logging(bool enable, const std::string& daemon_ip = "0.0.0.0", int port = 3490);
+    void set_log_mode(int mode); // DLT_USER_MODE_OFF, DLT_USER_MODE_EXTERNAL, DLT_USER_MODE_BOTH
     
-    // Lấy app hiện tại (để ModuleLogger có thể dùng)
-    std::string get_current_registered_app() const { return m_last_registered_app; }
-
+    // File management
+    void rotate_logs();
+    void cleanup_old_logs();
+    
+    // Get current app/context for thread
+    void set_current_app(const std::string& app_id);
+    void set_current_context(const std::string& context_id);
+    std::string get_current_app() const;
+    std::string get_current_context() const;
+    
 private:
     Logger();
     ~Logger();
-    Logger(const Logger&) = delete;
-    Logger& operator=(const Logger&) = delete;
-
-    struct AppContext {
+    
+    // DLT context management
+    struct ContextInfo {
+        DLT_DECLARE_CONTEXT(handle)
         std::string app_id;
-        std::string app_description;
-        std::map<std::string, DltContext*> contexts;
-        std::string default_context;
+        std::string context_id;
+        std::string description;
+        bool registered = false;
     };
     
-    // Member variables
-    std::map<std::string, AppContext*> m_apps;
-    std::string m_last_registered_app;  // Track app vừa được đăng ký
-    bool m_offline_logging_enabled;
-    unsigned int m_max_file_size;
-    unsigned int m_max_file_count;
-    std::string m_log_directory;
-    std::string m_current_trace_file;
-    pid_t m_dlt_receiver_pid;
-    mutable std::mutex m_mutex;
+    // Initialize DLT
+    bool init_dlt();
+    void cleanup_dlt();
     
-    // Helper functions
-    std::string get_thread_id();
-    void create_directory_if_not_exists(const std::string& path);
-    void init_dlt_with_file_logging();
-    void start_dlt_receiver();
-    void stop_dlt_receiver();
-    void rotate_log_file();
-    void cleanup_old_logs();
-    std::string get_current_date_as_string();
-    std::string generate_trace_filename();
+    // Generate log filename with date
+    std::string generate_log_filename();
     
-    DLT_DECLARE_CONTEXT(default_context);
+    // Thread-local storage for current app/context
+    static thread_local std::string current_app_;
+    static thread_local std::string current_context_;
+    
+    // Members
+    std::mutex mutex_;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::unique_ptr<ContextInfo>>> contexts_;
+    std::unordered_map<std::string, bool> registered_apps_;
+    
+    std::string log_directory_;
+    int max_file_count_;
+    size_t max_file_size_;
+    bool offline_logging_enabled_;
+    bool network_logging_enabled_;
+    bool dlt_initialized_;
+    
+    std::string current_log_file_;
+    std::string daemon_ip_;
+    int daemon_port_;
 };
 
-// ========== MACRO HELPERS CHO MODULE ==========
-
-// Macro để khởi tạo module logger trong class
+// Convenience macros for module usage
 #define DECLARE_MODULE_LOGGER() \
     private: \
-        ModuleLogger m_logger;
+        mutable ModuleLogger m_logger;
 
-// Macro để khởi tạo trong constructor
 #define INIT_MODULE_LOGGER(app_id) \
     m_logger(app_id)
 
-// Macros để log với module logger
+#define MODULE_LOG_VERBOSE \
+    m_logger.log(LogLevel::VERBOSE, __FILE__, __LINE__)
+
+#define MODULE_LOG_DEBUG \
+    m_logger.log(LogLevel::DEBUG, __FILE__, __LINE__)
+
 #define MODULE_LOG_INFO \
-    m_logger.info(__LINE__, __FUNCTION__)
+    m_logger.log(LogLevel::INFO, __FILE__, __LINE__)
 
 #define MODULE_LOG_WARNING \
-    m_logger.warning(__LINE__, __FUNCTION__)
+    m_logger.log(LogLevel::WARNING, __FILE__, __LINE__)
 
 #define MODULE_LOG_ERROR \
-    m_logger.error(__LINE__, __FUNCTION__)
+    m_logger.log(LogLevel::ERROR, __FILE__, __LINE__)
 
-// Macros để log với context cụ thể
-#define MODULE_LOG_INFO_CTX(ctx) \
-    m_logger.info(__LINE__, __FUNCTION__, ctx)
+#define MODULE_LOG_FATAL \
+    m_logger.log(LogLevel::FATAL, __FILE__, __LINE__)
 
-#define MODULE_LOG_WARNING_CTX(ctx) \
-    m_logger.warning(__LINE__, __FUNCTION__, ctx)
+// Global logging macros
+#define LOG_VERBOSE \
+    LogStream(Logger::get_instance(), LogLevel::VERBOSE, __FILE__, __LINE__)
 
-#define MODULE_LOG_ERROR_CTX(ctx) \
-    m_logger.error(__LINE__, __FUNCTION__, ctx)
+#define LOG_DEBUG \
+    LogStream(Logger::get_instance(), LogLevel::DEBUG, __FILE__, __LINE__)
 
-// ========== MACROS CHUNG CHO ĐĂNG KÝ ==========
+#define LOG_INFO \
+    LogStream(Logger::get_instance(), LogLevel::INFO, __FILE__, __LINE__)
+
+#define LOG_WARNING \
+    LogStream(Logger::get_instance(), LogLevel::WARNING, __FILE__, __LINE__)
+
+#define LOG_ERROR \
+    LogStream(Logger::get_instance(), LogLevel::ERROR, __FILE__, __LINE__)
+
+#define LOG_FATAL \
+    LogStream(Logger::get_instance(), LogLevel::FATAL, __FILE__, __LINE__)
+
+// Registration helper macros
 #define LOG_REGISTER_APP(app_id, desc) \
     Logger::get_instance().register_app(app_id, desc)
 
 #define LOG_REGISTER_CONTEXT(ctx_id, desc) \
-    Logger::get_instance().register_context(ctx_id, desc)
+    Logger::get_instance().register_context(Logger::get_instance().get_current_app(), ctx_id, desc)
 
-// Đăng ký context cho app cụ thể
-#define LOG_REGISTER_CONTEXT_FOR_APP(ctx_id, desc, app_id) \
-    Logger::get_instance().register_context(ctx_id, desc, app_id)
+#define LOG_SET_APP(app_id) \
+    Logger::get_instance().set_current_app(app_id)
 
-// ========== GLOBAL LOG MACROS (không cần app_id) ==========
-// Dùng cho main hoặc code không thuộc module nào
-#define LOG_INFO \
-    ModuleLogger::LogStream("MAIN", "DEFAULT", LOG_LEVEL_INFO, __LINE__, __FUNCTION__)
-
-#define LOG_WARNING \
-    ModuleLogger::LogStream("MAIN", "DEFAULT", LOG_LEVEL_WARNING, __LINE__, __FUNCTION__)
-
-#define LOG_ERROR \
-    ModuleLogger::LogStream("MAIN", "DEFAULT", LOG_LEVEL_ERROR, __LINE__, __FUNCTION__)
-
-// Alias cho compatibility
-using DLTLogger = Logger;
+#define LOG_SET_CONTEXT(ctx_id) \
+    Logger::get_instance().set_current_context(ctx_id)
 
 #endif // LOGGER_H

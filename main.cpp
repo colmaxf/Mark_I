@@ -293,11 +293,11 @@ void lidar_thread_func(
     ThreadSafeQueue<std::vector<Point2D>>& points_queue, 
     ThreadSafeQueue<std::string>& plc_command_queue)
 {
-#ifdef ENABLE_LOG
-    LOG_INFO << "[LiDAR Thread] Starting...";
-#else
+ #ifdef ENABLE_LOG
+     LOG_INFO << "[LiDAR Thread] Starting...";
+ #else
     std::cout << "[LiDAR Thread] Starting..." << std::endl;
-#endif
+ #endif
 
     // Khởi tạo LidarProcessor với các IP/Port mặc định
     std::string lidar_host_ip = LIDAR_HOST_IP;
@@ -377,11 +377,13 @@ void lidar_thread_func(
             if (min_dist_cm > 50.0f) {
                 plc_command_queue.push("WRITE_D_100_1");
                 // Debug output với màu xanh cho an toàn
+                LOG_INFO << "[REALTIME] Path clear: " << min_dist_cm << "cm";
                 std::cout << "\033[32m[REALTIME] Path clear: " << std::fixed << std::setprecision(2) 
                          << min_dist_cm << "cm\033[0m" << std::endl;
             } else {
                 plc_command_queue.push("WRITE_D_100_0");
                 // Debug output với màu đỏ cho cảnh báo
+                LOG_WARNING << "[REALTIME WARNING] Obstacle detected: " << min_dist_cm << "cm";
                 std::cout << "\033[31m[REALTIME WARNING] Obstacle detected: " << std::fixed << std::setprecision(2)
                          << min_dist_cm << "cm\033[0m" << std::endl;
             }
@@ -418,6 +420,7 @@ void lidar_thread_func(
         points_queue.push(stable_2d);
         
         // Log với màu xanh dương cho stable data
+        LOG_INFO << "[STABLE DATA] Processed " << stable_2d.size() << " points for server (Total stable scans: " << state.total_stable_hulls << ")";
         std::cout << "\033[34m[STABLE DATA] Processed " << stable_2d.size() 
                  << " points for server (Total stable scans: " 
                  << state.total_stable_hulls << ")\033[0m" << std::endl;
@@ -544,21 +547,26 @@ int main() {
     // Initialize logger
 // Lấy instance duy nhất của Logger (singleton)
     Logger& logger = Logger::get_instance();
-    logger.set_log_directory("./logs");
-    logger.set_max_file_size(10 * 1024 * 1024);  // 10MB
-    logger.set_max_file_count(5);                 // Giữ tối đa 5 file
-    logger.enable_offline_logging(false);
     
-    // // Đăng ký App ID cho main
-    // LOG_REGISTER_APP("MAIN", "Main Application");
+    // Configure logging
+    logger.set_log_directory("./logger/log/");
+    logger.set_max_file_count(15);
+    logger.set_max_file_size(100); // 100MB per file
+
+    // IMPORTANT: Enable both offline and network logging
+    // Or use combined mode:
+     //logger.set_log_mode(2); // 2 = BOTH (file + network)
+
+     logger.enable_offline_logging(true);  // Save to .dlt files
+     logger.enable_network_logging(true, "0.0.0.0", 3490); // Enable network access
     
-    // // Đăng ký các context cho main
-    // LOG_REGISTER_CONTEXT("INIT", "Initialization Context");
-    // LOG_REGISTER_CONTEXT("PROC", "Processing Context");
+
     
-    // // Set app và context hiện tại
-    // LOG_SET_APP("MAIN");
-    // LOG_SET_CONTEXT("[Main Thread]");
+    // Register MAIN app and context
+    LOG_REGISTER_APP("MAIN", "Main AGV Application");
+    LOG_REGISTER_CONTEXT("MAIN", "Main Control Context");
+    LOG_SET_APP("MAIN");
+    LOG_SET_CONTEXT("MAIN");
     LOG_INFO << "[Main Thread] System initialized";
 #endif
 

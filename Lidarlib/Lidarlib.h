@@ -204,7 +204,7 @@ public:
     void resumeProcessing();
     void resetStatistics();
     // Module logger - TỰ ĐỘNG QUẢN LÝ APP_ID
-    DECLARE_MODULE_LOGGER()
+    //DECLARE_MODULE_LOGGER()
     
 private:
     // Main processing loop

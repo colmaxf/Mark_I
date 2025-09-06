@@ -1,391 +1,419 @@
 #include "Logger.h"
 #include <iostream>
 #include <iomanip>
-#include <chrono>
-#include <string>
-#include <vector>
+#include <sstream>
 #include <algorithm>
-#include <cstdio>
-#include <dirent.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
-#include <signal.h>
+#include <sys/stat.h>
+#include <cstring>  // For memset
 
-// Constants
-const unsigned int DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024;
-const unsigned int DEFAULT_MAX_FILE_COUNT = 5;
-const std::string LOG_FILE_PREFIX = "trace_";
-const std::string LOG_FILE_SUFFIX = ".dlt";
+namespace fs = std::filesystem;
 
-// ========== ModuleLogger Implementation ==========
-ModuleLogger::ModuleLogger(const std::string& app_id, const std::string& default_context)
-    : m_app_id(app_id), m_default_context(default_context.empty() ? "DEFAULT" : default_context) {
+// Thread-local storage initialization
+thread_local std::string Logger::current_app_ = "MAIN";
+thread_local std::string Logger::current_context_ = "MAIN";
+
+// ========================================
+// LogStream Implementation
+// ========================================
+LogStream::LogStream(Logger& logger, LogLevel level, const char* file, int line)
+    : logger_(logger), level_(level), file_(file), line_(line) {
 }
 
-void ModuleLogger::setDefaultContext(const std::string& context) {
-    m_default_context = context;
-}
-
-ModuleLogger::LogStream ModuleLogger::info(int line, const char* function, const std::string& context) {
-    return LogStream(m_app_id, 
-                     context.empty() ? m_default_context : context,
-                     LOG_LEVEL_INFO, line, function);
-}
-
-ModuleLogger::LogStream ModuleLogger::warning(int line, const char* function, const std::string& context) {
-    return LogStream(m_app_id,
-                     context.empty() ? m_default_context : context,
-                     LOG_LEVEL_WARNING, line, function);
-}
-
-ModuleLogger::LogStream ModuleLogger::error(int line, const char* function, const std::string& context) {
-    return LogStream(m_app_id,
-                     context.empty() ? m_default_context : context,
-                     LOG_LEVEL_ERROR, line, function);
-}
-
-// ========== ModuleLogger::LogStream Implementation ==========
-ModuleLogger::LogStream::LogStream(const std::string& app_id, const std::string& context,
-                                    LogLevel level, int line, const char* function)
-    : m_app_id(app_id), m_context(context), m_level(level), 
-      m_line(line), m_function(function) {
-}
-
-ModuleLogger::LogStream::~LogStream() {
-    Logger::get_instance().log(m_level, m_line, m_function, 
-                                m_stream.str(), m_app_id, m_context);
-}
-
-// ========== Logger Implementation ==========
-Logger::Logger() 
-    : m_offline_logging_enabled(true),
-      m_max_file_size(DEFAULT_MAX_FILE_SIZE),
-      m_max_file_count(DEFAULT_MAX_FILE_COUNT),
-      m_log_directory("./logger/log/"),
-      m_dlt_receiver_pid(0) {
-    
-    create_directory_if_not_exists(m_log_directory);
-    init_dlt_with_file_logging();
-    DLT_REGISTER_CONTEXT(default_context, "DEF", "Default Context");
-}
-
-Logger::~Logger() {
-    stop_dlt_receiver();
-    
-    for (auto& app_pair : m_apps) {
-        for (auto& ctx_pair : app_pair.second->contexts) {
-            dlt_unregister_context(ctx_pair.second);
-            delete ctx_pair.second;
-        }
-        delete app_pair.second;
+LogStream::~LogStream() {
+    std::string message = buffer_.str();
+    if (!message.empty()) {
+        logger_.log(logger_.get_current_app(), 
+                   logger_.get_current_context(),
+                   level_, message, file_, line_);
     }
-    
-    DLT_UNREGISTER_CONTEXT(default_context);
-    DLT_UNREGISTER_APP();
 }
 
+// ========================================
+// ModuleLogger Implementation
+// ========================================
+ModuleLogger::ModuleLogger(const std::string& app_id) 
+    : app_id_(app_id), default_context_("CORE") {
+}
+
+void ModuleLogger::setDefaultContext(const std::string& context_id) {
+    default_context_ = context_id;
+}
+
+LogStream ModuleLogger::log(LogLevel level, const char* file, int line) {
+    Logger& logger = Logger::get_instance();
+    
+    // Temporarily set app and context for this log
+    std::string prev_app = logger.get_current_app();
+    std::string prev_ctx = logger.get_current_context();
+    
+    logger.set_current_app(app_id_);
+    logger.set_current_context(default_context_);
+    
+    // Return by moving to avoid copy
+    return LogStream(logger, level, file, line);
+}
+
+// ========================================
+// Logger Singleton Implementation
+// ========================================
 Logger& Logger::get_instance() {
     static Logger instance;
     return instance;
 }
 
-bool Logger::register_app(const std::string& app_id, const std::string& app_description) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+Logger::Logger() 
+    : log_directory_("./logger/log/"),
+      max_file_count_(15),
+      max_file_size_(100 * 1024 * 1024), // 100MB default
+      offline_logging_enabled_(true),
+      network_logging_enabled_(false),
+      dlt_initialized_(false),
+      daemon_ip_("0.0.0.0"),
+      daemon_port_(3490) {
     
-    if (m_apps.find(app_id) != m_apps.end()) {
-        return false;  // Already registered
+    // Create log directory if it doesn't exist
+    fs::create_directories(log_directory_);
+    
+    // Initialize DLT
+    init_dlt();
+    
+    // Clean up old logs on startup
+    cleanup_old_logs();
+}
+
+Logger::~Logger() {
+    cleanup_dlt();
+}
+
+bool Logger::init_dlt() {
+    if (dlt_initialized_) {
+        return true;
     }
     
-    if (dlt_register_app(app_id.c_str(), app_description.c_str()) != DLT_RETURN_OK) {
-        std::cerr << "Logger Error: Failed to register DLT app: " << app_id << std::endl;
-        return false;
+    // Configure DLT for network mode if enabled
+    if (network_logging_enabled_) {
+        // Set verbose mode to see all log levels
+        dlt_verbose_mode();
+        
+        // Enable network trace via environment variables
+        setenv("DLT_INITIAL_LOG_LEVEL", "6", 1); // Set to verbose
+        setenv("DLT_LOG_MODE", "2", 1); // 2 = both file and network
     }
     
-    AppContext* app = new AppContext();
-    app->app_id = app_id;
-    app->app_description = app_description;
-    app->default_context = "DEFAULT";
+    // Register application with DLT daemon
+    DLT_REGISTER_APP("AGVS", "AGV System Logger");
     
-    m_apps[app_id] = app;
-    m_last_registered_app = app_id;  // Lưu lại app vừa đăng ký
+    // Set log level and trace status for the application
+    dlt_set_application_ll_ts_limit(DLT_LOG_DEBUG, DLT_TRACE_STATUS_ON);
     
+    // Enable offline logging if configured
+    if (offline_logging_enabled_) {
+        std::string log_file = generate_log_filename();
+        current_log_file_ = log_directory_ + log_file;
+        
+        // Create offline trace file path
+        std::string offline_trace_file = log_directory_ + "offline_trace.txt";
+        
+        // Note: Standard DLT doesn't have direct offline trace API
+        // Offline logging is handled by the DLT daemon configuration
+        // The daemon should be configured to save logs to files
+        
+        std::cout << "DLT logging enabled. Files will be saved to: " << log_directory_ << std::endl;
+        std::cout << "Configure DLT daemon for offline tracing in /etc/dlt.conf" << std::endl;
+    }
+    
+    // Enable network logging if configured
+    if (network_logging_enabled_) {
+        std::cout << "DLT network logging enabled - accessible via DLT Viewer" << std::endl;
+        std::cout << "Connect DLT Viewer to: " << daemon_ip_ << ":" << daemon_port_ << std::endl;
+    }
+    
+    dlt_initialized_ = true;
     return true;
 }
 
-bool Logger::register_context(const std::string& context_id, const std::string& context_description,
-                               const std::string& app_id) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    
-    // Sử dụng app_id được truyền vào hoặc app được đăng ký gần nhất
-    std::string target_app = app_id.empty() ? m_last_registered_app : app_id;
-    
-    if (target_app.empty()) {
-        std::cerr << "Logger Error: No app registered yet" << std::endl;
-        return false;
+void Logger::cleanup_dlt() {
+    if (!dlt_initialized_) {
+        return;
     }
     
-    auto app_it = m_apps.find(target_app);
-    if (app_it == m_apps.end()) {
-        std::cerr << "Logger Error: App not found: " << target_app << std::endl;
-        return false;
-    }
-    
-    if (app_it->second->contexts.find(context_id) != app_it->second->contexts.end()) {
-        return false;  // Context already exists
-    }
-    
-    DltContext* new_context = new DltContext();
-    if (!new_context) {
-        return false;
-    }
-
-    if (dlt_register_context(new_context, context_id.c_str(), context_description.c_str()) != DLT_RETURN_OK) {
-        delete new_context;
-        std::cerr << "Logger Error: Failed to register DLT context: " << context_id << std::endl;
-        return false;
-    }
-    
-    app_it->second->contexts[context_id] = new_context;
-    
-    // Set as default context if it's the first one
-    if (app_it->second->contexts.size() == 1) {
-        app_it->second->default_context = context_id;
-    }
-    
-    return true;
-}
-
-void Logger::log(LogLevel level, int line, const char* function, 
-                 const std::string& message,
-                 const std::string& app_id,
-                 const std::string& context_id) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    
-    DltContext* ctx_ptr = nullptr;
-    
-    // Find the appropriate DLT context
-    auto app_it = m_apps.find(app_id);
-    if (app_it != m_apps.end()) {
-        // Try to find the specific context
-        auto ctx_it = app_it->second->contexts.find(context_id);
-        if (ctx_it != app_it->second->contexts.end()) {
-            ctx_ptr = ctx_it->second;
-        } else {
-            // Use default context of the app if specific context not found
-            ctx_it = app_it->second->contexts.find(app_it->second->default_context);
-            if (ctx_it != app_it->second->contexts.end()) {
-                ctx_ptr = ctx_it->second;
+    // Unregister all contexts
+    for (auto& app_pair : contexts_) {
+        for (auto& ctx_pair : app_pair.second) {
+            if (ctx_pair.second->registered) {
+                DLT_UNREGISTER_CONTEXT(ctx_pair.second->handle);
             }
         }
     }
     
-    // Use default context if no suitable context found
-    if (!ctx_ptr) {
-        ctx_ptr = &default_context;
-    }
-
-    DltLogLevelType dlt_level = static_cast<DltLogLevelType>(level);
-    std::string thread_id = get_thread_id();
+    // Unregister application
+    DLT_UNREGISTER_APP();
     
-    // Log to DLT
-    DLT_LOG(*ctx_ptr, dlt_level, 
-        DLT_STRING(message.c_str()),
-        DLT_STRING("func"), DLT_STRING(function),
-        DLT_STRING("line"), DLT_INT(line),
-        DLT_STRING("tid"), DLT_STRING(thread_id.c_str()),
-        DLT_STRING("app"), DLT_STRING(app_id.c_str()),
-        DLT_STRING("ctx"), DLT_STRING(context_id.c_str())
-    );
-    
-    rotate_log_file();
+    dlt_initialized_ = false;
 }
 
-void Logger::set_log_directory(const std::string& path) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+bool Logger::register_app(const std::string& app_id, const std::string&) {
+    std::lock_guard<std::mutex> lock(mutex_);
     
-    stop_dlt_receiver();
-    
-    m_log_directory = path;
-    
-    if (!m_log_directory.empty() && m_log_directory.back() == '/') {
-        m_log_directory.pop_back();
+    if (registered_apps_.find(app_id) != registered_apps_.end()) {
+        return true; // Already registered
     }
     
-    if (!m_log_directory.empty()) {
-        create_directory_if_not_exists(m_log_directory);
-        
-        if (m_offline_logging_enabled) {
-            start_dlt_receiver();
+    // Mark as registered
+    registered_apps_[app_id] = true;
+
+    // Set as current app for this thread
+    current_app_ = app_id;
+    
+    return true;
+}
+
+bool Logger::register_context(const std::string& app_id, 
+                              const std::string& context_id, 
+                              const std::string& description) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Check if context already exists
+    if (contexts_.find(app_id) != contexts_.end() &&
+        contexts_[app_id].find(context_id) != contexts_[app_id].end()) {
+        return true; // Already registered
+    }
+    
+    // Create new context info
+    auto ctx_info = std::make_unique<ContextInfo>();
+    ctx_info->app_id = app_id;
+    ctx_info->context_id = context_id;
+    ctx_info->description = description;
+    
+    // Create combined context ID for DLT (4 chars max)
+    std::string dlt_ctx_id = context_id.substr(0, 4);
+    
+    // Register with DLT using standard API
+    DLT_REGISTER_CONTEXT(ctx_info->handle, dlt_ctx_id.c_str(), description.c_str());
+    ctx_info->registered = true;
+    
+    // Set default log level
+    dlt_set_application_ll_ts_limit(DLT_LOG_DEBUG, DLT_TRACE_STATUS_ON);
+    
+    // Store context info
+    contexts_[app_id][context_id] = std::move(ctx_info);
+    
+    return true;
+}
+
+void Logger::log(const std::string& app_id, const std::string& context_id,
+                LogLevel level, const std::string& message,
+                const char* file, int line) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Find context
+    auto app_it = contexts_.find(app_id);
+    if (app_it == contexts_.end()) {
+        // Auto-register app if not exists
+        register_app(app_id, app_id + " Application");
+        register_context(app_id, context_id, context_id + " Context");
+        app_it = contexts_.find(app_id);
+    }
+    
+    auto ctx_it = app_it->second.find(context_id);
+    if (ctx_it == app_it->second.end()) {
+        // Auto-register context if not exists
+        register_context(app_id, context_id, context_id + " Context");
+        ctx_it = app_it->second.find(context_id);
+    }
+    
+    if (ctx_it == app_it->second.end() || !ctx_it->second->registered) {
+        std::cerr << "Context not registered: " << app_id << "/" << context_id << std::endl;
+        return;
+    }
+    
+    // Prepare log message with file and line info if available
+    std::string log_msg = message;
+    if (file != nullptr && line > 0) {
+        // Extract just the filename from the full path
+        std::string filename(file);
+        size_t last_slash = filename.find_last_of("/\\");
+        if (last_slash != std::string::npos) {
+            filename = filename.substr(last_slash + 1);
         }
+        log_msg = "[" + filename + ":" + std::to_string(line) + "] " + message;
     }
+    
+    // Log to DLT
+    DLT_LOG(ctx_it->second->handle, 
+            static_cast<DltLogLevelType>(level),
+            DLT_STRING(log_msg.c_str()));
+    
+    // Also log to console in debug mode
+    #ifdef DEBUG
+    const char* level_str = "";
+    switch(level) {
+        case LogLevel::VERBOSE: level_str = "VERBOSE"; break;
+        case LogLevel::DEBUG: level_str = "DEBUG"; break;
+        case LogLevel::INFO: level_str = "INFO"; break;
+        case LogLevel::WARNING: level_str = "WARNING"; break;
+        case LogLevel::ERROR: level_str = "ERROR"; break;
+        case LogLevel::FATAL: level_str = "FATAL"; break;
+    }
+    
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
+    
+    std::cout << "[" << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
+    std::cout << "." << std::setfill('0') << std::setw(3) << ms.count() << "] ";
+    std::cout << "[" << app_id << "/" << context_id << "] ";
+    std::cout << "[" << level_str << "] " << log_msg << std::endl;
+    #endif
+    
+    // Check if we need to rotate logs (manual rotation for file-based logging)
+    rotate_logs();
+}
+
+void Logger::set_current_app(const std::string& app_id) {
+    current_app_ = app_id;
+}
+
+void Logger::set_current_context(const std::string& context_id) {
+    current_context_ = context_id;
+}
+
+std::string Logger::get_current_app() const {
+    return current_app_;
+}
+
+std::string Logger::get_current_context() const {
+    return current_context_;
+}
+
+void Logger::set_log_directory(const std::string& dir) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    log_directory_ = dir;
+    if (log_directory_.back() != '/') {
+        log_directory_ += '/';
+    }
+    fs::create_directories(log_directory_);
+}
+
+void Logger::set_max_file_count(int count) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    max_file_count_ = count;
+}
+
+void Logger::set_max_file_size(size_t size_mb) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    max_file_size_ = size_mb * 1024 * 1024; // Convert MB to bytes
 }
 
 void Logger::enable_offline_logging(bool enable) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(mutex_);
+    offline_logging_enabled_ = enable;
     
-    if (m_offline_logging_enabled == enable) {
-        return;
-    }
-    
-    m_offline_logging_enabled = enable;
-    
-    if (enable) {
-        start_dlt_receiver();
-    } else {
-        stop_dlt_receiver();
+    if (dlt_initialized_) {
+        if (enable) {
+            std::cout << "Offline logging enabled. Logs will be saved via DLT daemon." << std::endl;
+        } else {
+            std::cout << "Offline logging disabled." << std::endl;
+        }
     }
 }
 
-void Logger::set_max_file_size(unsigned int size) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_max_file_size = size;
+void Logger::enable_network_logging(bool enable, const std::string& daemon_ip, int port) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    network_logging_enabled_ = enable;
+    daemon_ip_ = daemon_ip;
+    daemon_port_ = port;
+    
+    if (dlt_initialized_ && enable) {
+        std::cout << "Network logging enabled. DLT Viewer can connect to: " 
+                  << daemon_ip_ << ":" << daemon_port_ << std::endl;
+    }
 }
 
-void Logger::set_max_file_count(unsigned int count) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_max_file_count = count;
-    cleanup_old_logs();
+void Logger::set_log_mode(int mode) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Set DLT log mode
+    // 0 = OFF, 1 = EXTERNAL (network only), 2 = BOTH (file and network)
+    
+    if (mode == 2) { // BOTH mode
+        enable_offline_logging(true);
+        network_logging_enabled_ = true;
+    } else if (mode == 1) { // EXTERNAL mode (network only)
+        enable_offline_logging(false);
+        network_logging_enabled_ = true;
+    } else { // OFF mode
+        enable_offline_logging(false);
+        network_logging_enabled_ = false;
+    }
 }
 
-std::string Logger::get_thread_id() {
-    std::stringstream ss;
-    ss << std::this_thread::get_id();
-    return ss.str();
-}
-
-std::string Logger::get_current_date_as_string() {
+std::string Logger::generate_log_filename() {
     auto now = std::chrono::system_clock::now();
-    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    
     std::stringstream ss;
-    ss << std::put_time(std::localtime(&in_time_t), "%Y_%m_%d_%H%M%S");
+    ss << "trace_" << std::put_time(std::localtime(&time_t), "%Y%m%d") << ".dlt";
     return ss.str();
 }
 
-std::string Logger::generate_trace_filename() {
-    return LOG_FILE_PREFIX + get_current_date_as_string() + LOG_FILE_SUFFIX;
-}
-
-void Logger::create_directory_if_not_exists(const std::string& path) {
-    size_t pos = 0;
-    std::string sub_path;
-    do {
-        pos = path.find('/', pos + 1);
-        sub_path = path.substr(0, pos);
-        if (sub_path.empty()) {
-            continue;
-        }
-        if (mkdir(sub_path.c_str(), 0755) && errno != EEXIST) {
-            std::cerr << "Logger Error: Failed to create directory '" 
-                      << sub_path << "': " << strerror(errno) << std::endl;
-            return;
-        }
-    } while (pos != std::string::npos);
-}
-
-void Logger::init_dlt_with_file_logging() {
-    if (!m_offline_logging_enabled) {
-        return;
-    }
+void Logger::rotate_logs() {
+    // Manual log rotation based on file size
+    // This is a simplified version since DLT handles its own log files
     
-    DLT_REGISTER_APP("DEFAULT", "Default DLT Application");
-    dlt_set_log_mode(DLT_USER_MODE_BOTH);
-    dlt_verbose_mode();
-    
-    start_dlt_receiver();
-    cleanup_old_logs();
-}
-
-void Logger::start_dlt_receiver() {
-    if (m_dlt_receiver_pid > 0) {
-        if (kill(m_dlt_receiver_pid, 0) == 0) {
-            return;
-        }
-    }
-    
-    m_current_trace_file = m_log_directory + "/" + generate_trace_filename();
-    
-    m_dlt_receiver_pid = fork();
-    
-    if (m_dlt_receiver_pid == 0) {
-        freopen("/dev/null", "w", stdout);
-        freopen("/dev/null", "w", stderr);
+    // Check if current log file exists and its size
+    if (!current_log_file_.empty() && fs::exists(current_log_file_)) {
+        auto file_size = fs::file_size(current_log_file_);
         
-        execl("/usr/bin/dlt-receive", "dlt-receive",
-              "-o", m_current_trace_file.c_str(),
-              "localhost", 
-              nullptr);
-              
-        execl("/usr/local/bin/dlt-receive", "dlt-receive",
-              "-o", m_current_trace_file.c_str(),
-              "localhost", 
-              nullptr);
-        
-        exit(1);
-    } else if (m_dlt_receiver_pid > 0) {
-        std::cout << "Logger Info: Started dlt-receive (PID: " << m_dlt_receiver_pid 
-                  << ") writing to: " << m_current_trace_file << std::endl;
-        usleep(100000);
-    } else {
-        std::cerr << "Logger Warning: Failed to start dlt-receive. "
-                  << "Please run manually: dlt-receive -o " << m_current_trace_file 
-                  << " localhost" << std::endl;
-    }
-}
-
-void Logger::stop_dlt_receiver() {
-    if (m_dlt_receiver_pid > 0) {
-        kill(m_dlt_receiver_pid, SIGTERM);
-        
-        int status;
-        waitpid(m_dlt_receiver_pid, &status, 0);
-        
-        m_dlt_receiver_pid = 0;
-        std::cout << "Logger Info: Stopped dlt-receive" << std::endl;
-    }
-}
-
-void Logger::rotate_log_file() {
-    struct stat file_stat;
-    if (stat(m_current_trace_file.c_str(), &file_stat) == 0) {
-        if (static_cast<unsigned int>(file_stat.st_size) > m_max_file_size) {
-            stop_dlt_receiver();
-            m_current_trace_file = m_log_directory + "/" + generate_trace_filename();
-            start_dlt_receiver();
+        // If file exceeds max size, create a new one
+        if (file_size >= max_file_size_) {
+            // Generate new filename with timestamp
+            auto now = std::chrono::system_clock::now();
+            auto time_t = std::chrono::system_clock::to_time_t(now);
+            
+            std::stringstream ss;
+            ss << "trace_" << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S") << ".dlt";
+            current_log_file_ = log_directory_ + ss.str();
+            
+            std::cout << "Log rotated to: " << current_log_file_ << std::endl;
+            
+            // Clean up old files
             cleanup_old_logs();
         }
     }
 }
 
 void Logger::cleanup_old_logs() {
-    std::vector<std::string> log_files;
-    const std::string& search_path = m_log_directory;
+    std::vector<fs::path> log_files;
     
-    DIR* dir = opendir(search_path.c_str());
-    if (dir) {
-        struct dirent* entry;
-        while ((entry = readdir(dir)) != nullptr) {
-            std::string filename = entry->d_name;
-            if (filename.find(LOG_FILE_SUFFIX) != std::string::npos &&
-                filename.find(LOG_FILE_PREFIX) == 0) {
-                log_files.push_back(filename);
+    // Collect all .dlt files in the log directory
+    try {
+        for (const auto& entry : fs::directory_iterator(log_directory_)) {
+            if (entry.path().extension() == ".dlt") {
+                log_files.push_back(entry.path());
             }
         }
-        closedir(dir);
-    } else {
+    } catch (const fs::filesystem_error& e) {
+        std::cerr << "Error accessing log directory: " << e.what() << std::endl;
         return;
     }
     
-    if (log_files.size() > m_max_file_count) {
-        std::sort(log_files.begin(), log_files.end());
-        
-        size_t files_to_delete = log_files.size() - m_max_file_count;
-        for (size_t i = 0; i < files_to_delete; ++i) {
-            std::string file_to_delete = m_log_directory + "/" + log_files[i];
-            if (std::remove(file_to_delete.c_str()) != 0) {
-                std::cerr << "Logger Warning: Failed to delete old log file: " 
-                          << file_to_delete << std::endl;
-            }
+    // Sort files by last write time (oldest first)
+    std::sort(log_files.begin(), log_files.end(),
+              [](const fs::path& a, const fs::path& b) {
+                  return fs::last_write_time(a) < fs::last_write_time(b);
+              });
+    
+    // Remove oldest files if we exceed max count
+    while (log_files.size() > static_cast<size_t>(max_file_count_)) {
+        try {
+            fs::remove(log_files.front());
+            std::cout << "Removed old log file: " << log_files.front() << std::endl;
+            log_files.erase(log_files.begin());
+        } catch (const fs::filesystem_error& e) {
+            std::cerr << "Error removing log file: " << e.what() << std::endl;
+            break;
         }
     }
 }

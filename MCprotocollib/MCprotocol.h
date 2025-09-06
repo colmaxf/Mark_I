@@ -178,8 +178,7 @@ public:
     
     /// @}
 
-    // Module logger - TỰ ĐỘNG QUẢN LÝ APP_ID
-    DECLARE_MODULE_LOGGER()
+    
 private:
     SOCKET m_socket_fd;               ///< Socket file descriptor
     std::string m_plc_ip;             ///< PLC IP address
