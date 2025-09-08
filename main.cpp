@@ -156,12 +156,226 @@ struct SystemState {
     std::vector<Point2D> latest_convex_hull;
     int total_stable_hulls = 0;
     int total_scan_count = 0;
+
+    // THÊM CÁC TRƯỜNG MỚI
+    bool is_safe_to_move = false;           // Cờ an toàn từ LiDAR realtime
+    float current_front_distance = -1.0f;  // Khoảng cách phía trước hiện tại (cm)
+    long last_safety_update = 0;           // Timestamp cập nhật an toàn cuối cùng
     
     // SLAM mapping data
     std::vector<std::vector<Point2D>> global_map_hulls;
     long last_hull_timestamp = 0;
 
 };
+/**
+ * @brief Xử lý input từ bàn phím và gửi lệnh tương ứng xuống PLC
+ * @param input Ký tự nhập từ bàn phím (1, 2, 3, 4)
+ * @param plc_command_queue Queue để gửi lệnh PLC
+ * @param plc_result_queue Queue để nhận kết quả từ PLC
+ * @return true nếu xử lý thành công, false nếu input không hợp lệ
+ */
+bool handleKeyboardInput(char input, 
+                        ThreadSafeQueue<std::string>& plc_command_queue,
+                        ThreadSafeQueue<std::string>& plc_result_queue,
+                        SystemState& system_state) {
+    
+    std::string command;
+    bool need_safety_check = false;
+    
+    switch(input) {
+        case '1':
+            // Lệnh đặc biệt: cần kiểm tra an toàn trước khi ghi D100
+            command = "WRITE_D100_1";
+            need_safety_check = true;
+            LOG_INFO << "[Keyboard] User pressed 1 -> Request to write 1 to D100 (safety check required)";
+            break;
+        case '2':
+            command = "WRITE_D101_1";
+            LOG_INFO << "[Keyboard] User pressed 2 -> Writing 1 to D101";
+            break;
+        case '3':
+            command = "WRITE_D102_1";
+            LOG_INFO << "[Keyboard] User pressed 3 -> Writing 1 to D102";
+            break;
+        case '4':
+            command = "WRITE_D103_1";
+            LOG_INFO << "[Keyboard] User pressed 4 -> Writing 1 to D103";
+            break;
+        default:
+            LOG_WARNING << "[Keyboard] Invalid input: " << input << " (Expected: 1, 2, 3, or 4)";
+            return false;
+    }
+    
+    // Kiểm tra an toàn cho lệnh ghi D100
+    if (need_safety_check) {
+        bool is_safe = false;
+        float front_distance = -1.0f;
+        long last_update = 0;
+        
+        // Lấy cờ an toàn và dữ liệu từ system state
+        {
+            std::lock_guard<std::mutex> lock(system_state.state_mutex);
+            is_safe = system_state.is_safe_to_move;
+            front_distance = system_state.current_front_distance;
+            last_update = system_state.last_safety_update;
+        }
+        
+        // Kiểm tra tính cập nhật của dữ liệu (trong vòng 2 giây)
+        long current_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        bool data_is_fresh = (current_time - last_update) < 2000; // 2 seconds
+        
+        LOG_INFO << "[Keyboard] Safety check for D100: Safe=" << (is_safe ? "YES" : "NO") 
+                << ", Front=" << front_distance << "cm, DataAge=" << (current_time - last_update) << "ms";
+        
+        // Kiểm tra điều kiện an toàn
+        if (!data_is_fresh) {
+            LOG_ERROR << "[Keyboard] SAFETY BLOCK: LiDAR safety data is stale (>" 
+                     << (current_time - last_update) << "ms old)";
+            std::cout << "❌ SAFETY BLOCK: LiDAR safety data is too old!" << std::endl;
+            return false;
+        }
+        
+        if (front_distance < 0) {
+            LOG_ERROR << "[Keyboard] SAFETY BLOCK: Invalid front distance data";
+            std::cout << "❌ SAFETY BLOCK: LiDAR distance data invalid!" << std::endl;
+            return false;
+        }
+        
+        if (!is_safe) {
+            LOG_WARNING << "[Keyboard] SAFETY BLOCK: LiDAR safety flag is FALSE. Front distance: " 
+                       << front_distance << "cm";
+            std::cout << "❌ SAFETY BLOCK: Path not clear! Front distance: " << front_distance 
+                     << "cm (must be > 50cm)" << std::endl;
+            return false;
+        }
+        
+        // An toàn - cho phép thực hiện lệnh
+        LOG_INFO << "[Keyboard] SAFETY OK: LiDAR reports safe conditions. Front distance: " 
+                << front_distance << "cm. Proceeding with D100 write command.";
+        std::cout << "✅ SAFETY OK: Path clear (" << front_distance 
+                 << "cm). Writing to D100..." << std::endl;
+    }
+    
+    // Gửi lệnh vào queue
+    plc_command_queue.push(command);
+    
+    // Chờ phản hồi từ PLC (timeout 3 giây)
+    std::string result;
+    if (plc_result_queue.pop(result, 3000)) {
+        LOG_INFO << "[Keyboard] PLC Response: " << result;
+        return true;
+    } else {
+        LOG_ERROR << "[Keyboard] Timeout waiting for PLC response!";
+        return false;
+    }
+}
+
+
+/**
+ * @brief Thread function để xử lý input từ bàn phím
+ * @param plc_command_queue Queue để gửi lệnh PLC
+ * @param plc_result_queue Queue để nhận kết quả từ PLC
+ * @param system_state Tham chiếu đến system state để kiểm tra dữ liệu LiDAR
+ */
+void keyboard_input_thread(ThreadSafeQueue<std::string>& plc_command_queue,
+                          ThreadSafeQueue<std::string>& plc_result_queue,
+                          SystemState& system_state) {
+    
+    LOG_INFO << "[Keyboard Thread] Started. Press 1-4 to send commands to PLC, 'q' to quit";
+    LOG_INFO << "[Keyboard Thread]=== PLC Control Interface ===" ;
+    LOG_INFO << "[Keyboard Thread]Available commands:" ;
+    LOG_INFO << "[Keyboard Thread]  1 -> Write 1 to D100 (with safety check)" ;
+    LOG_INFO << "[Keyboard Thread]  2 -> Write 1 to D101" ;
+    LOG_INFO << "[Keyboard Thread]  3 -> Write 1 to D102" ;
+    LOG_INFO << "[Keyboard Thread]  4 -> Write 1 to D103" ;
+    LOG_INFO << "[Keyboard Thread]  q -> Quit program" ;
+    LOG_INFO << "[Keyboard Thread]==============================" ;
+    
+    char input;
+    while (global_running) {
+        LOG_INFO << "[Keyboard Thread] Enter command (1-4, q=quit): ";
+        std::cout << "Enter command (1-4, q=quit): ";
+        std::cin >> input;
+        
+        // Xử lý lệnh quit
+        if (input == 'q' || input == 'Q') {
+            LOG_INFO << "[Keyboard Thread] Quit command received";
+            global_running = false;
+            break;
+        }
+        
+        // Xử lý các lệnh PLC với kiểm tra an toàn
+        bool success = handleKeyboardInput(input, plc_command_queue, plc_result_queue, system_state);
+        
+        if (success) {
+            LOG_INFO << "[Keyboard Thread] Command executed successfully!";
+            std::cout << "Command executed successfully!\n" << std::endl;
+        } else {
+            LOG_ERROR << "[Keyboard Thread] Command failed, blocked, or invalid input!";
+            std::cout << "✗ Command failed, blocked, or invalid input!\n" << std::endl;
+        }
+        
+        // Ngắt nghỉ ngắn để tránh busy waiting
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    
+    LOG_INFO << "[Keyboard Thread] Stopped";
+}
+
+/**
+ * @brief Phiên bản non-blocking của keyboard input (không cần thread riêng)
+ * Thêm vào main loop để kiểm tra input định kỳ
+ */
+void checkKeyboardInputNonBlocking(ThreadSafeQueue<std::string>& plc_command_queue,
+                                  ThreadSafeQueue<std::string>& plc_result_queue,
+                                  SystemState& system_state) {
+    
+    static bool first_call = true;
+    if (first_call) {
+        LOG_INFO << "[Keyboard Thread]=== PLC Control Interface ===" ;
+        LOG_INFO << "[Keyboard Thread]Available commands:" ;
+        LOG_INFO << "[Keyboard Thread]  1 -> Write 1 to D100 (with safety check)" ;
+        LOG_INFO << "[Keyboard Thread]  2 -> Write 1 to D101" ;
+        LOG_INFO << "[Keyboard Thread]  3 -> Write 1 to D102" ;
+        LOG_INFO << "[Keyboard Thread]  4 -> Write 1 to D103" ;
+        LOG_INFO << "[Keyboard Thread]  q -> Quit program" ;
+        LOG_INFO << "[Keyboard Thread]==============================" ;
+        first_call = false;
+    }
+    
+    // Kiểm tra xem có input từ stdin không (non-blocking)
+    fd_set read_fds;
+    struct timeval timeout;
+    
+    FD_ZERO(&read_fds);
+    FD_SET(STDIN_FILENO, &read_fds);
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 0;
+    
+    int result = select(STDIN_FILENO + 1, &read_fds, NULL, NULL, &timeout);
+    
+    if (result > 0 && FD_ISSET(STDIN_FILENO, &read_fds)) {
+        char input;
+        if (std::cin >> input) {
+            if (input == 'q' || input == 'Q') {
+                LOG_INFO << "[Main] Quit command received";
+                global_running = false;
+                return;
+            }
+            
+            bool success = handleKeyboardInput(input, plc_command_queue, plc_result_queue, system_state);
+            
+            if (success) {
+                LOG_INFO << "[Keyboard Thread] Command executed successfully!" ;
+            } else {
+                LOG_ERROR << "[Keyboard Thread] Command failed, blocked, or invalid input!" ;
+            }
+            LOG_INFO << "[Keyboard Thread] Enter next command (1-4, q=quit): ";
+            std::cout.flush();
+        }
+    }
+}
 
 // Queue để truyền convex hull giữa các thread
 // Communication queues
@@ -347,12 +561,12 @@ void lidar_thread_func(
             
             // Gửi lệnh PLC ngay lập tức
             if (min_dist_cm > 50.0f) {
-                plc_command_queue.push("WRITE_D_100_1");
+                plc_command_queue.push("WRITE_D100_1");
                 // Debug output với màu xanh cho an toàn
                 LOG_INFO << "[REALTIME] Path clear: " << min_dist_cm << "cm";
 
             } else {
-                plc_command_queue.push("WRITE_D_100_0");
+                plc_command_queue.push("WRITE_D100_0");
                 // Debug output với màu đỏ cho cảnh báo
                 LOG_WARNING << "[REALTIME WARNING] Obstacle detected: " << min_dist_cm << "cm";
             }
@@ -530,11 +744,16 @@ int main() {
     ThreadSafeQueue<std::string> plc_result_queue;
 
     // Start all threads
-    // std::thread plc_thread(plc_thread_func, std::ref(shared_state), 
-    //                       std::ref(plc_command_queue), std::ref(plc_result_queue));
+     std::thread plc_thread(plc_thread_func, std::ref(shared_state), 
+                           std::ref(plc_command_queue), std::ref(plc_result_queue));
     // KHỞI CHẠY LUỒNG LIDAR
     std::thread lidar_thread(lidar_thread_func, std::ref(shared_state),
                            std::ref(stable_points_queue), std::ref(plc_command_queue));
+    // 3. KEYBOARD INPUT THREAD (MỚI THÊM)
+    std::thread keyboard_thread(keyboard_input_thread, 
+                               std::ref(plc_command_queue), 
+                               std::ref(plc_result_queue), 
+                               std::ref(shared_state));
     //Server thread
     // std::thread webserver_thread(webserver_thread_func, std::ref(shared_state), std::ref(stable_points_queue));
     //Battery thread
@@ -603,14 +822,19 @@ int main() {
     global_running = false;
     
     // Join all threads
-    // if (plc_thread.joinable()) {
-    //     plc_thread.join();
-    //     std::cout << "[Main Thread] PLC thread stopped." << std::endl;
-    // }
+    if (plc_thread.joinable()) {
+        plc_thread.join();
+        std::cout << "[Main Thread] PLC thread stopped." << std::endl;
+    }
 
     if (lidar_thread.joinable()) {
         lidar_thread.join();
         std::cout << "[Main Thread] LiDAR thread stopped." << std::endl;
+    }
+
+       if (keyboard_thread.joinable()) {
+        keyboard_thread.join();
+        std::cout << "[Main Thread] Keyboard thread stopped." << std::endl;
     }
 
     std::cout << "[Main Thread] System shutdown complete." << std::endl;
