@@ -384,6 +384,28 @@ vector<LidarPoint> RealtimeStabilizer::computeStabilizedPoints() {
          [](const LidarPoint& a, const LidarPoint& b) {
              return a.angle < b.angle;
          });
+    LOG_INFO << "[LIDAR-RT] Stability: Generated "     << stabilized.size() << " points";
+    // // Tạo stringstream để xây dựng chuỗi log
+    // std::ostringstream log_stream;
+    // log_stream << "[LIDAR-RT] Stability: Generated " 
+    //            << stabilized.size() << " points: [";
+
+    // // Duyệt qua vector và thêm thông tin từng điểm vào stream
+    // for (size_t i = 0; i < stabilized.size(); ++i) {
+    //     const auto& p = stabilized[i];
+        
+    //     // Thêm nội dung của điểm. Ví dụ: (angle, distance)
+    //     // Bạn có thể thêm bất kỳ thuộc tính nào bạn muốn (p.x, p.y...)
+    //     log_stream << "(" << p.angle << " rad, " << p.distance << " m)";
+        
+    //     if (i < stabilized.size() - 1) {
+    //         log_stream << ", "; // Thêm dấu phẩy giữa các điểm
+    //     }
+    // }
+    // log_stream << "]"; // Đóng ngoặc
+
+    // // Lấy chuỗi hoàn chỉnh từ stream và đưa vào LOG_INFO
+    // LOG_INFO << log_stream.str();
     
     return stabilized;
 }
@@ -428,11 +450,8 @@ LidarProcessor::LidarProcessor(const string& local_ip, const string& local_port,
       is_running(false), is_processing(false), total_scans(0), valid_scans(0), 
       stable_scans(0), average_points_per_scan(0), processing_rate(0) /*,INIT_MODULE_LOGGER("LIDA")*/ {
     
-    #ifdef ENABLE_LOG
-         LOG_INFO << "[LIDAR-RT] LidarProcessor instance created.";
-    #else
-        std::cout << "[LIDAR-RT] LidarProcessor instance created." << std::endl;
-    #endif
+    LOG_INFO << "[LIDAR-RT] LidarProcessor instance created.";
+
     // Khởi tạo các thành phần xử lý
     noise_filter = make_unique<NoiseFilter>();
     data_buffer = make_unique<LidarBuffer>(100);
@@ -449,25 +468,18 @@ LidarProcessor::~LidarProcessor() {
 
 bool LidarProcessor::initialize() {
     try {
-        #ifdef ENABLE_LOG
-             LOG_INFO  << "[LIDAR-RT] Initializing Realtime LiDAR System...";
-             LOG_INFO  << "[LIDAR-RT] Local: " << local_ip << ":" << local_port;
-             LOG_INFO  << "[LIDAR-RT] Laser: " << laser_ip << ":" << laser_port;
-        #endif
-            cout << "[LIDAR-RT] Initializing Realtime LiDAR System..." << endl;
-            cout << "[LIDAR-RT] Local: " << local_ip << ":" << local_port << endl;
-            cout << "[LIDAR-RT] Laser: " << laser_ip << ":" << laser_port << endl;
-        
+
+        LOG_INFO  << "[LIDAR-RT] Initializing Realtime LiDAR System...";
+        LOG_INFO  << "[LIDAR-RT] Local: " << local_ip << ":" << local_port;
+        LOG_INFO  << "[LIDAR-RT] Laser: " << laser_ip << ":" << laser_port;       
         
         // Tạo đối tượng LakiBeamUDP
         lidar = make_unique<LakiBeamUDP>(local_ip, local_port, laser_ip, laser_port);
         
         // THÊM: Kiểm tra kết nối thực sự bằng cách thử lấy dữ liệu
-        #ifdef ENABLE_LOG
-             LOG_INFO  << "[LIDAR-RT] Waiting for LiDAR data...";
-        #else
-            cout << "[LIDAR-RT] Waiting for LiDAR data..." << endl;
-        #endif
+
+        LOG_INFO  << "[LIDAR-RT] Waiting for LiDAR data...";
+
         // Cố gắng lấy dữ liệu trong một khoảng thời gian chờ (timeout) để xác nhận kết nối.
         auto start_wait = chrono::steady_clock::now();
         const int timeout_seconds = 5;
@@ -478,12 +490,10 @@ bool LidarProcessor::initialize() {
             if (lidar->get_repackedpack(test_packet)) {
                 // Kiểm tra xem gói dữ liệu nhận được có hợp lệ không.
                 if (test_packet.maxdots > 0 && test_packet.maxdots <= CONFIG_CIRCLE_DOTS) {
+
                     data_received = true;
-#ifdef ENABLE_LOG
-                     LOG_INFO  << "[LIDAR-RT] LiDAR data received! Points: " << test_packet.maxdots;
-#else
-                    cout << "[LIDAR-RT] LiDAR data received! Points: " << test_packet.maxdots << endl;
-#endif
+                    LOG_INFO  << "[LIDAR-RT] LiDAR data received! Points: " << test_packet.maxdots;
+
                     break;
                 }
             }
@@ -492,59 +502,39 @@ bool LidarProcessor::initialize() {
         
         if (!data_received) {
             // Nếu không nhận được dữ liệu sau khoảng thời gian chờ, báo lỗi và hướng dẫn người dùng.
-#ifdef ENABLE_LOG
-             LOG_ERROR << "[LIDAR-RT] No data received from LiDAR after " << timeout_seconds << " seconds!";
-             LOG_ERROR << "[LIDAR-RT] Please check: ";
-             LOG_ERROR << "[LIDAR-RT]   1. LiDAR is powered on";
-             LOG_ERROR << "[LIDAR-RT]   2. Network cable is connected";
-             LOG_ERROR << "[LIDAR-RT]   3. IP addresses are correct";
-             LOG_ERROR << "[LIDAR-RT]   4. Firewall is not blocking UDP port " << local_port;
-#else
-            cerr << "[LIDAR-RT] ERROR: No data received from LiDAR after " << timeout_seconds << " seconds!" << endl;
-            cerr << "[LIDAR-RT] Please check: " << endl;
-            cerr << "[LIDAR-RT]   1. LiDAR is powered on" << endl;
-            cerr << "[LIDAR-RT]   2. Network cable is connected" << endl;
-            cerr << "[LIDAR-RT]   3. IP addresses are correct" << endl;
-            cerr << "[LIDAR-RT]   4. Firewall is not blocking UDP port " << local_port << endl;
-#endif
+
+            LOG_ERROR << "[LIDAR-RT] No data received from LiDAR after " << timeout_seconds << " seconds!";
+            LOG_ERROR << "[LIDAR-RT] Please check: ";
+            LOG_ERROR << "[LIDAR-RT]   1. LiDAR is powered on";
+            LOG_ERROR << "[LIDAR-RT]   2. Network cable is connected";
+            LOG_ERROR << "[LIDAR-RT]   3. IP addresses are correct";
+            LOG_ERROR << "[LIDAR-RT]   4. Firewall is not blocking UDP port " << local_port;
             
             lidar.reset(); // Clean up
             return false;
         }
         
-#ifdef ENABLE_LOG
          LOG_INFO  << "[LIDAR-RT] Initialization successful! LiDAR is responding.";
-#else
-        cout << "[LIDAR-RT] Initialization successful! LiDAR is responding." << endl;
-#endif
         return true;
         
     } catch (const exception& e) {
-#ifdef ENABLE_LOG
-         LOG_ERROR << "[LIDAR-RT] Initialization failed: " << e.what();
-#else
-        cerr << "[LIDAR-RT] Initialization failed: " << e.what() << endl;
-#endif
+        
+        LOG_ERROR << "[LIDAR-RT] Initialization failed: " << e.what();
         return false;
+    
     }
 }
 
 bool LidarProcessor::start() {
     if (!lidar) {
-        #ifdef ENABLE_LOG
-             LOG_ERROR << "[LIDAR-RT] LiDAR not initialized!";
-        #else
-            cout << "[LIDAR-RT]  LiDAR not initialized!" << endl;
-        #endif
+
+        LOG_ERROR << "[LIDAR-RT] LiDAR not initialized!";
         return false;
+
     }
     
     if (is_running) {
-#ifdef ENABLE_LOG
-             LOG_WARNING << "[LIDAR-RT] Already running!";
-#else
-            cout << "[LIDAR-RT] ⚠️ Already running!" << endl;
-#endif
+        LOG_WARNING << "[LIDAR-RT] Already running!";
         return true;
     }
     
@@ -554,22 +544,17 @@ bool LidarProcessor::start() {
     
     processing_thread = make_unique<thread>(&LidarProcessor::processLidarData, this);
     
-#ifdef ENABLE_LOG
-         LOG_INFO  << "[LIDAR-RT] Realtime processing started!";
-#else
-        cout << "[LIDAR-RT] Realtime processing started!" << endl;
-#endif
+    LOG_INFO  << "[LIDAR-RT] Realtime processing started!";
+
     return true;
 }
 
 void LidarProcessor::stop() {
     if (!is_running) return;
     
-#ifdef ENABLE_LOG
-         LOG_INFO  << "[LIDAR-RT] Stopping realtime processing...";
-#else
-        cout << "[LIDAR-RT] Stopping realtime processing..." << endl;
-#endif
+
+    LOG_INFO  << "[LIDAR-RT] Stopping realtime processing...";
+
     
     is_running = false;
     
@@ -581,11 +566,10 @@ void LidarProcessor::stop() {
     lidar.reset();
     
     printStatus();
-#ifdef ENABLE_LOG
-         LOG_INFO  << "[LIDAR-RT] Stopped successfully.";
-#else
-        cout << "[LIDAR-RT] Stopped successfully." << endl;
-#endif
+
+    LOG_INFO  << "[LIDAR-RT] Stopped successfully.";
+
+
 }
 
 /**
@@ -594,11 +578,8 @@ void LidarProcessor::stop() {
  */
 // Main processing loop - PHẦN QUAN TRỌNG NHẤT
 void LidarProcessor::processLidarData() {
-#ifdef ENABLE_LOG
-         LOG_INFO  << "[LIDAR-RT] Processing thread started";
-#else
-        cout << "[LIDAR-RT] Processing thread started" << endl;
-#endif
+
+    LOG_INFO  << "[LIDAR-RT] Processing thread started";
     
     while (is_running) {
         if (!is_processing) {
@@ -683,11 +664,8 @@ void LidarProcessor::processLidarData() {
         this_thread::sleep_for(chrono::microseconds(100));
     }
     
-#ifdef ENABLE_LOG
-         LOG_INFO  << "[LIDAR-RT] Processing thread stopped";
-#else
-        cout << "[LIDAR-RT] Processing thread stopped" << endl;
-#endif
+        LOG_INFO  << "[LIDAR-RT] Processing thread stopped";
+
 }
 
 /**
@@ -765,7 +743,6 @@ void LidarProcessor::updateProcessingRate() {
  * @brief In ra các thông tin trạng thái và hiệu suất của LidarProcessor.
  */
 void LidarProcessor::printStatus() const {
-#ifdef ENABLE_LOG
          LOG_INFO << "--- LiDAR Processor Status ---";
          LOG_INFO << "Total Scans: " << total_scans.load();
          LOG_INFO << "Valid Scans: " << valid_scans.load();
@@ -775,17 +752,6 @@ void LidarProcessor::printStatus() const {
          LOG_INFO << "Stability Score: " << getStabilityScore();
          LOG_INFO << "Uptime: " << getUptime() << " seconds";
          LOG_INFO << "-------------------------------";
-#else
-            cout << "\n--- LiDAR Processor Status ---" << endl;
-            cout << "Total Scans: " << total_scans.load() << endl;
-            cout << "Valid Scans: " << valid_scans.load() << endl;
-            cout << "Stable Scans: " << stable_scans.load() << endl;
-            cout << "Processing Rate: " << processing_rate.load() << " Hz" << endl;
-            cout << "Data Validity: " << getDataValidityRatio() * 100 << "%" << endl;
-            cout << "Stability Score: " << getStabilityScore() << endl;
-            cout << "Uptime: " << getUptime() << " seconds" << endl;
-            cout << "-------------------------------\n" << endl;
-#endif
 }
 
 /**

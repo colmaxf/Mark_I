@@ -20,9 +20,7 @@
 #include <unistd.h>
 
 #include "../config.h"
-#ifdef ENABLE_LOG
 #include "../logger/Logger.h"
-#endif
 
 /// Linux socket compatibility defines
 #define SOCKET int

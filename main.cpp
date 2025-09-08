@@ -10,9 +10,8 @@
 #include <cmath>
 
 #include "config.h"
-#ifdef ENABLE_LOG
 #include "logger/Logger.h"
-#endif
+
 
 #include "MCprotocollib/MCprotocol.h"
 #include "Lidarlib/Lidarlib.h"
@@ -175,11 +174,7 @@ void plc_thread_func(
     ThreadSafeQueue<std::string>& command_queue,
     ThreadSafeQueue<std::string>& result_queue)
 {
-#ifdef ENABLE_LOG
     LOG_INFO << "[PLC Thread] Starting...";
-#else
-    std::cout << "[PLC Thread] Starting..." << std::endl;
-#endif
 
     // Create MC Protocol client instance
     MCProtocol plc(PLC_IP, PLC_PORT);
@@ -191,11 +186,8 @@ void plc_thread_func(
     
     while (connection_attempts < max_attempts && !connection_established) {
         connection_attempts++;
-#ifdef ENABLE_LOG
+
         LOG_INFO << "[PLC Thread] Connection attempt " << connection_attempts << "/" << max_attempts;
-#else
-        std::cout << "[PLC Thread] Connection attempt " << connection_attempts << "/" << max_attempts << std::endl;
-#endif
         
         if (plc.connect()) {
             connection_established = true;
@@ -204,33 +196,27 @@ void plc_thread_func(
                 state.plc_connected = true;
                 state.last_plc_status = "PLC connected successfully";
             }
-#ifdef ENABLE_LOG
+
             LOG_INFO << "[PLC Thread] Connected to PLC successfully";
-#else
-            std::cout << "[PLC Thread] Connected to PLC successfully" << std::endl;
-#endif
+
         } else {
             {
                 std::lock_guard<std::mutex> lock(state.state_mutex);
                 state.plc_connected = false;
                 state.last_plc_status = "PLC connection failed, attempt " + std::to_string(connection_attempts);
             }
-#ifdef ENABLE_LOG
+
             LOG_ERROR << "[PLC Thread] Failed to connect to PLC, attempt " << connection_attempts;
-#else
-            std::cerr << "[PLC Thread] Failed to connect to PLC, attempt " << connection_attempts << std::endl;
-#endif
+
             std::this_thread::sleep_for(std::chrono::seconds(2));
         }
     }
     
     // If connection failed after all attempts, continue with simulation mode
     if (!connection_established) {
-#ifdef ENABLE_LOG
+
         LOG_WARNING << "[PLC Thread] Running in simulation mode (PLC not connected)";
-#else
-        std::cout << "[PLC Thread] Running in simulation mode (PLC not connected)" << std::endl;
-#endif
+
         {
             std::lock_guard<std::mutex> lock(state.state_mutex);
             state.last_plc_status = "Running in simulation mode";
@@ -243,11 +229,8 @@ void plc_thread_func(
         
         // Wait for command with timeout
         if (command_queue.pop(command, 100)) { // 100ms timeout
-#ifdef ENABLE_LOG
+
             LOG_INFO << "[PLC Thread] Received command: " << command;
-#else
-            std::cout << "[PLC Thread] Received command: " << command << std::endl;
-#endif
 
             std::string plc_response;
             
@@ -259,11 +242,7 @@ void plc_thread_func(
 
                 } catch (const std::exception& e) {
                     plc_response = "PLC Error: " + std::string(e.what());
-#ifdef ENABLE_LOG
                     LOG_ERROR << "[PLC Thread] PLC communication error: " << e.what();
-#else
-                    std::cerr << "[PLC Thread] PLC communication error: " << e.what() << std::endl;
-#endif
                 }
             } else {
                 // Simulation mode
@@ -293,11 +272,8 @@ void lidar_thread_func(
     ThreadSafeQueue<std::vector<Point2D>>& points_queue, 
     ThreadSafeQueue<std::string>& plc_command_queue)
 {
- #ifdef ENABLE_LOG
-     LOG_INFO << "[LiDAR Thread] Starting...";
- #else
-    std::cout << "[LiDAR Thread] Starting..." << std::endl;
- #endif
+
+    LOG_INFO << "[LiDAR Thread] Starting...";
 
     // Khởi tạo LidarProcessor với các IP/Port mặc định
     std::string lidar_host_ip = LIDAR_HOST_IP;
@@ -309,11 +285,9 @@ void lidar_thread_func(
 
     // Bước 1: Khởi tạo kết nối với LiDAR
     if (!lidar_processor->initialize()) {
-#ifdef ENABLE_LOG
+
         LOG_ERROR << "[LiDAR Thread] Failed to initialize LidarProcessor.";
-#else
-        std::cerr << "[LiDAR Thread] Failed to initialize LidarProcessor." << std::endl;
-#endif
+
         {
             std::lock_guard<std::mutex> lock(state.state_mutex);
             state.lidar_connected = false;
@@ -324,12 +298,10 @@ void lidar_thread_func(
 
     // Bước 2: Bắt đầu luồng xử lý dữ liệu ngầm của thư viện LiDAR
     if (!lidar_processor->start()) {
-#ifdef ENABLE_LOG
+
         LOG_ERROR << "[LiDAR Thread] Failed to start LidarProcessor.";
-#else
-        std::cerr << "[LiDAR Thread] Failed to start LidarProcessor." << std::endl;
-#endif
-         {
+
+        {
             std::lock_guard<std::mutex> lock(state.state_mutex);
             state.lidar_connected = false;
             state.last_lidar_data = "Lidar start failed";
@@ -378,14 +350,11 @@ void lidar_thread_func(
                 plc_command_queue.push("WRITE_D_100_1");
                 // Debug output với màu xanh cho an toàn
                 LOG_INFO << "[REALTIME] Path clear: " << min_dist_cm << "cm";
-                std::cout << "\033[32m[REALTIME] Path clear: " << std::fixed << std::setprecision(2) 
-                         << min_dist_cm << "cm\033[0m" << std::endl;
+
             } else {
                 plc_command_queue.push("WRITE_D_100_0");
                 // Debug output với màu đỏ cho cảnh báo
                 LOG_WARNING << "[REALTIME WARNING] Obstacle detected: " << min_dist_cm << "cm";
-                std::cout << "\033[31m[REALTIME WARNING] Obstacle detected: " << std::fixed << std::setprecision(2)
-                         << min_dist_cm << "cm\033[0m" << std::endl;
             }
             
             // Cập nhật state với thông tin realtime
@@ -421,9 +390,6 @@ void lidar_thread_func(
         
         // Log với màu xanh dương cho stable data
         LOG_INFO << "[STABLE DATA] Processed " << stable_2d.size() << " points for server (Total stable scans: " << state.total_stable_hulls << ")";
-        std::cout << "\033[34m[STABLE DATA] Processed " << stable_2d.size() 
-                 << " points for server (Total stable scans: " 
-                 << state.total_stable_hulls << ")\033[0m" << std::endl;
     });
     
     // 3. Điều chỉnh tham số cho cân bằng giữa realtime và stability
@@ -443,11 +409,7 @@ void lidar_thread_func(
 
     // Bắt đầu xử lý
     if (!lidar_processor->start()) {
-#ifdef ENABLE_LOG
         LOG_ERROR << "[LiDAR Thread] Failed to start LidarProcessor.";
-#else
-        std::cerr << "[LiDAR Thread] Failed to start LidarProcessor." << std::endl;
-#endif
         {
             std::lock_guard<std::mutex> lock(state.state_mutex);
             state.lidar_connected = false;
@@ -463,9 +425,9 @@ void lidar_thread_func(
         state.last_lidar_data = "Lidar connected - Dual mode active";
     }
 
-    std::cout << "\033[32m[LiDAR Thread] Successfully started with dual-mode processing:\033[0m" << std::endl;
-    std::cout << "  - REALTIME mode: Obstacle detection with immediate response" << std::endl;
-    std::cout << "  - STABLE mode: Filtered data for server upload" << std::endl;
+    LOG_INFO << "[32m[LiDAR Thread] Successfully started with dual-mode processing:"; 
+    LOG_INFO << "  - REALTIME mode: Obstacle detection with immediate response";
+    LOG_INFO << "  - STABLE mode: Filtered data for server upload";
 
     // Biến để theo dõi hiệu suất
     auto last_stats_time = std::chrono::steady_clock::now();
@@ -478,26 +440,24 @@ void lidar_thread_func(
         // In thống kê định kỳ
         if (current_time - last_stats_time >= stats_interval) {
             if (lidar_processor->isProcessing()) {
-                std::cout << "\n\033[36m=== LIDAR PERFORMANCE STATS ===\033[0m" << std::endl;
-                std::cout << "Processing Rate: " << std::fixed << std::setprecision(1) 
-                         << lidar_processor->getProcessingRate() << " Hz" << std::endl;
-                std::cout << "Stability Score: " << std::fixed << std::setprecision(1)
-                         << lidar_processor->getStabilityScore() * 100 << "%" << std::endl;
-                std::cout << "Data Validity: " << std::fixed << std::setprecision(1)
-                         << lidar_processor->getDataValidityRatio() * 100 << "%" << std::endl;
-                std::cout << "Total Scans: " << lidar_processor->getTotalScans() 
+
+                LOG_INFO << "[=== LIDAR PERFORMANCE STATS ===";
+                LOG_INFO << "Processing Rate: " << lidar_processor->getProcessingRate() << " Hz"
+                         << " | Stability Score: " << lidar_processor->getStabilityScore() * 100 << "%" 
+                         << " | Data Validity: " << lidar_processor->getDataValidityRatio() * 100 << "%" 
+                         << " | Total Scans: " << lidar_processor->getTotalScans() 
                          << " | Valid: " << lidar_processor->getValidScans()
-                         << " | Stable: " << lidar_processor->getStableScans() << std::endl;
-                std::cout << "Uptime: " << std::fixed << std::setprecision(1)
-                         << lidar_processor->getUptime() << " seconds" << std::endl;
-                std::cout << "\033[36m===============================\033[0m\n" << std::endl;
+                         << " | Stable: " << lidar_processor->getStableScans() 
+                         << " | Uptime: " << lidar_processor->getUptime() << " seconds" ;
+                LOG_INFO << "[===============================" ;
+
             }
             last_stats_time = current_time;
         }
         
         // Kiểm tra kết nối
         if (!lidar_processor->isConnected()) {
-            std::cerr << "\033[31m[LiDAR Thread] Connection lost! Attempting to reconnect...\033[0m" << std::endl;
+            LOG_WARNING << "[LiDAR Thread] Connection lost! Attempting to reconnect...";
             // TODO: Implement reconnection logic if needed
         }
         
@@ -505,14 +465,10 @@ void lidar_thread_func(
     }
 
     // Dừng xử lý LiDAR
-    std::cout << "[LiDAR Thread] Shutting down..." << std::endl;
+    LOG_INFO << "[LiDAR Thread] Shutting down...";
     lidar_processor->stop();
     
-#ifdef ENABLE_LOG
     LOG_INFO << "[LiDAR Thread] Stopped successfully.";
-#else
-    std::cout << "[LiDAR Thread] Stopped successfully." << std::endl;
-#endif
 }
 
 // Luồng giám sát Pin
@@ -543,22 +499,21 @@ void lidar_thread_func(
 int main() {
     std::cout << "[Main Thread] Control system starting..." << std::endl;
 
-#ifdef ENABLE_LOG
     // Initialize logger
 // Lấy instance duy nhất của Logger (singleton)
     Logger& logger = Logger::get_instance();
     
     // Configure logging
-    logger.set_log_directory("./logger/log/");
-    logger.set_max_file_count(15);
-    logger.set_max_file_size(100); // 100MB per file
+    // logger.set_log_directory("./logger/log/");
+    // logger.set_max_file_count(15);
+    // logger.set_max_file_size(100); // 100MB per file
 
-    // IMPORTANT: Enable both offline and network logging
-    // Or use combined mode:
-     //logger.set_log_mode(2); // 2 = BOTH (file + network)
+    // // IMPORTANT: Enable both offline and network logging
+    // // Or use combined mode:
+    //  //logger.set_log_mode(2); // 2 = BOTH (file + network)
 
-     logger.enable_offline_logging(true);  // Save to .dlt files
-     logger.enable_network_logging(true, "0.0.0.0", 3490); // Enable network access
+    //  logger.enable_offline_logging(true);  // Save to .dlt files
+    //  logger.enable_network_logging(true, "0.0.0.0", 3490); // Enable network access
     
 
     
@@ -568,7 +523,6 @@ int main() {
     LOG_SET_APP("MAIN");
     LOG_SET_CONTEXT("MAIN");
     LOG_INFO << "[Main Thread] System initialized";
-#endif
 
 
     SystemState shared_state;
@@ -593,11 +547,11 @@ int main() {
         std::this_thread::sleep_for(std::chrono::seconds(5));
         {
             std::lock_guard<std::mutex> lock(shared_state.state_mutex);
-            std::cout << "\n--- SYSTEM STATUS ---" << std::endl;
-            std::cout << "PLC Connected: " << (shared_state.plc_connected ? "Yes" : "No") << std::endl;
-            std::cout << "LiDAR Connected: " << (shared_state.lidar_connected ? "Yes" : "No") << std::endl;
-            std::cout << "Last LiDAR Data: " << shared_state.last_lidar_data << std::endl;
-            std::cout << "---------------------\n" << std::endl;
+            LOG_INFO << "--- SYSTEM STATUS ---" ;
+            LOG_INFO << "PLC Connected: " << (shared_state.plc_connected ? "Yes" : "No") ;
+            LOG_INFO << "LiDAR Connected: " << (shared_state.lidar_connected ? "Yes" : "No") ;
+            LOG_INFO << "Last LiDAR Data: " << shared_state.last_lidar_data ;
+            LOG_INFO << "---------------------";
         }
 
         // Có thể thêm điều kiện để dừng chương trình, ví dụ: nhấn phím

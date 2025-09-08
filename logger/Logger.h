@@ -8,9 +8,6 @@
 #include <mutex>
 #include <unordered_map>
 #include <chrono>
-#include <ctime>
-#include <filesystem>
-#include <vector>
 
 // Log levels matching DLT
 enum class LogLevel {
@@ -77,23 +74,14 @@ public:
              LogLevel level, const std::string& message,
              const char* file = nullptr, int line = 0);
     
-    // Configuration
-    void set_log_directory(const std::string& dir);
-    void set_max_file_count(int count);
-    void set_max_file_size(size_t size_mb);
-    void enable_offline_logging(bool enable);
-    void enable_network_logging(bool enable, const std::string& daemon_ip = "0.0.0.0", int port = 3490);
-    void set_log_mode(int mode); // DLT_USER_MODE_OFF, DLT_USER_MODE_EXTERNAL, DLT_USER_MODE_BOTH
-    
-    // File management
-    void rotate_logs();
-    void cleanup_old_logs();
-    
     // Get current app/context for thread
     void set_current_app(const std::string& app_id);
     void set_current_context(const std::string& context_id);
     std::string get_current_app() const;
     std::string get_current_context() const;
+    
+    // Check if DLT is initialized
+    bool is_initialized() const { return dlt_initialized_; }
     
 private:
     Logger();
@@ -112,9 +100,6 @@ private:
     bool init_dlt();
     void cleanup_dlt();
     
-    // Generate log filename with date
-    std::string generate_log_filename();
-    
     // Thread-local storage for current app/context
     static thread_local std::string current_app_;
     static thread_local std::string current_context_;
@@ -123,17 +108,7 @@ private:
     std::mutex mutex_;
     std::unordered_map<std::string, std::unordered_map<std::string, std::unique_ptr<ContextInfo>>> contexts_;
     std::unordered_map<std::string, bool> registered_apps_;
-    
-    std::string log_directory_;
-    int max_file_count_;
-    size_t max_file_size_;
-    bool offline_logging_enabled_;
-    bool network_logging_enabled_;
     bool dlt_initialized_;
-    
-    std::string current_log_file_;
-    std::string daemon_ip_;
-    int daemon_port_;
 };
 
 // Convenience macros for module usage

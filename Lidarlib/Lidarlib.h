@@ -12,9 +12,8 @@
 #include <memory>
 
 #include "../config.h"
-#ifdef ENABLE_LOG
 #include "../logger/Logger.h"
-#endif
+
 
 // Cấu trúc điểm 2D với timestamp
 struct LidarPoint {
