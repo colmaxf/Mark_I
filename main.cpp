@@ -271,110 +271,248 @@ bool handleKeyboardInput(char input,
     }
 }
 
+/**
+ * @brief Worker thread thực hiện việc ghi liên tục
+ * @param value Giá trị cần ghi (1-9)
+ * @param plc_command_queue Queue để gửi lệnh PLC
+ * @param plc_result_queue Queue để nhận kết quả từ PLC
+ * @param system_state Tham chiếu đến system state
+ * @param should_stop Atomic flag để dừng thread
+ */
+void continuousWriteWorker(int value,
+                          ThreadSafeQueue<std::string>& plc_command_queue,
+                          ThreadSafeQueue<std::string>& plc_result_queue,
+                          SystemState& system_state,
+                          std::atomic<bool>& should_stop) {
+    
+    LOG_INFO << "[Writer-" << value << "] Started continuous writing of " << value;
+    
+    int value_write;
+    if(value < 1 || value > 9){
+        value_write = 0;
+    }else{
+        value_write = 1;
+    }
+    
+    int write_count = 0;
+    auto start_time = std::chrono::steady_clock::now();
+    
+    while (!should_stop && global_running) {
+        // Tạo lệnh PLC để ghi giá trị vào thanh ghi tương ứng
+        std::string command;
+        bool need_safety_check = false;
+        
+        switch(value) {
+            case 1:
+                command = "WRITE_D100_1" ;//+ std::to_string(value_write);
+                need_safety_check = true;  // D100 cần kiểm tra an toàn
+                break;
+            case 2:
+                command = "WRITE_D100_2" ;//+ std::to_string(value_write);
+                need_safety_check = true;
+                break;
+            case 3:
+                command = "WRITE_D101_0" ;//+ std::to_string(value_write);
+                break;
+            case 4:
+                command = "WRITE_D101_1" ;//+ std::to_string(value_write);
+                break;
+            case 5:
+                command = "WRITE_D101_2" ;//+ std::to_string(value_write);
+                break;
+            case 6:
+                command = "WRITE_D100_0" ;//+ std::to_string(value_write);
+                break;
+            case 7:
+                command = "WRITE_D106_" + std::to_string(value_write);
+                break;
+            case 8:
+                command = "WRITE_D107_" + std::to_string(value_write);
+                break;
+            case 9:
+                command = "WRITE_D108_" + std::to_string(value_write);
+                break;
+            default:
+                for(int i = 1; i <= 9; i++ ){
+                    command = "WRITE_D10" + std::to_string(i) + "_" + std::to_string(value_write);
+                    plc_command_queue.push(command);
+                }
+                return;
+        }
+        //-----------------TEST--------------------
+        //Kiểm tra an toàn cho D100 (value = 1)
+        if (need_safety_check) {
+            bool is_safe = false;
+            float front_distance = -1.0f;
+            
+            {
+                std::lock_guard<std::mutex> lock(system_state.state_mutex);
+                is_safe = system_state.is_safe_to_move;
+                front_distance = system_state.current_front_distance;
+            }
+            
+            if (!is_safe || front_distance <= 50.0f) {
+                LOG_WARNING << "[Writer-" << value << "] Safety check failed. Skipping write. Distance: " << front_distance << "cm";
+                plc_command_queue.push("WRITE_D100_0");
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                continue;
+            }
+        }
+        
+        // Gửi lệnh PLC
+        plc_command_queue.push(command);
+        
+        // Chờ phản hồi (timeout ngắn để không block quá lâu)
+        std::string result;
+        if (plc_result_queue.pop(result, 1000)) {  // 1 second timeout
+            write_count++;
+            if (write_count % 10 == 0) {  // Log mỗi 10 lần ghi
+                auto current_time = std::chrono::steady_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::seconds>(current_time - start_time);
+                LOG_INFO << "[Writer-" << value << "] Written " << write_count << " times in " 
+                        << duration.count() << " seconds. Rate: " 
+                        << (write_count / (duration.count() + 1)) << " writes/sec";
+            }
+        } else {
+            LOG_WARNING << "[Writer-" << value << "] PLC timeout for command: " << command;
+        }
+        
+        // Nghỉ giữa các lần ghi (có thể điều chỉnh tần suất)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));  // 10 Hz
+    }
+    
+    auto end_time = std::chrono::steady_clock::now();
+    auto total_duration = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
+    
+    LOG_INFO << "[Writer-" << value << "] Stopped. Total writes: " << write_count 
+            << " in " << total_duration.count() << " seconds";
+}
+
 
 /**
- * @brief Thread function để xử lý input từ bàn phím
+ * @brief Hàm xử lý ghi liên tục dữ liệu từ bàn phím
  * @param plc_command_queue Queue để gửi lệnh PLC
  * @param plc_result_queue Queue để nhận kết quả từ PLC
  * @param system_state Tham chiếu đến system state để kiểm tra dữ liệu LiDAR
  */
-void keyboard_input_thread(ThreadSafeQueue<std::string>& plc_command_queue,
-                          ThreadSafeQueue<std::string>& plc_result_queue,
-                          SystemState& system_state) {
+void continuousWriteHandler(ThreadSafeQueue<std::string>& plc_command_queue,
+                           ThreadSafeQueue<std::string>& plc_result_queue,
+                           SystemState& system_state) {
     
-    LOG_INFO << "[Keyboard Thread] Started. Press 1-4 to send commands to PLC, 'q' to quit";
-    LOG_INFO << "[Keyboard Thread]=== PLC Control Interface ===" ;
-    LOG_INFO << "[Keyboard Thread]Available commands:" ;
-    LOG_INFO << "[Keyboard Thread]  1 -> Write 1 to D100 (with safety check)" ;
-    LOG_INFO << "[Keyboard Thread]  2 -> Write 1 to D101" ;
-    LOG_INFO << "[Keyboard Thread]  3 -> Write 1 to D102" ;
-    LOG_INFO << "[Keyboard Thread]  4 -> Write 1 to D103" ;
-    LOG_INFO << "[Keyboard Thread]  q -> Quit program" ;
-    LOG_INFO << "[Keyboard Thread]==============================" ;
+    std::cout << "\n=== Continuous Write Mode ===" << std::endl;
+    std::cout << "Enter a number (1-9) to start continuous writing" << std::endl;
+    std::cout << "Enter 0 to stop current writing and return to menu" << std::endl;
+    std::cout << "==============================\n" << std::endl;
     
-    char input;
+    int input_value = -1;
+    int current_writing_value = 0;  // Giá trị đang được ghi liên tục
+    bool is_writing = false;        // Cờ báo hiệu có đang ghi liên tục không
+    std::atomic<bool> should_stop_writing{false};
+    std::unique_ptr<std::thread> writing_thread;
+    
     while (global_running) {
-        LOG_INFO << "[Keyboard Thread] Enter command (1-4, q=quit): ";
-        std::cout << "Enter command (1-4, q=quit): ";
-        std::cin >> input;
+        std::cout << "Enter number (1-9 to start writing, 0 to stop): ";
+        std::cin >> input_value;
         
-        // Xử lý lệnh quit
-        if (input == 'q' || input == 'Q') {
-            LOG_INFO << "[Keyboard Thread] Quit command received";
-            global_running = false;
-            break;
+        // Kiểm tra input hợp lệ
+        if (input_value < 0 || input_value > 9) {
+            std::cout << "Invalid input! Please enter 0-9." << std::endl;
+            continue;
         }
         
-        // Xử lý các lệnh PLC với kiểm tra an toàn
-        bool success = handleKeyboardInput(input, plc_command_queue, plc_result_queue, system_state);
-        
-        if (success) {
-            LOG_INFO << "[Keyboard Thread] Command executed successfully!";
-            std::cout << "Command executed successfully!\n" << std::endl;
-        } else {
-            LOG_ERROR << "[Keyboard Thread] Command failed, blocked, or invalid input!";
-            std::cout << "✗ Command failed, blocked, or invalid input!\n" << std::endl;
+        // Xử lý lệnh dừng (0)
+        if (input_value == 0) {
+            if (is_writing) {
+                LOG_INFO << "[Continuous] Stop command received. Stopping continuous write of value " << current_writing_value;
+                std::cout << "Stopping continuous write..." << std::endl;
+                for(int i = 0; i <= 9; i++ ){
+                    std::string command = "WRITE_D10" + std::to_string(i) + "_" + std::to_string(0);
+                    plc_command_queue.push(command);
+                }
+                // Dừng thread ghi liên tục
+                should_stop_writing = true;
+                if (writing_thread && writing_thread->joinable()) {
+                    writing_thread->join();
+                }
+                
+                is_writing = false;
+                current_writing_value = 0;
+                std::cout << "Continuous writing stopped." << std::endl;
+            } else {
+                std::cout << "No continuous writing in progress." << std::endl;
+            }
+            continue;
         }
         
-        // Ngắt nghỉ ngắn để tránh busy waiting
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // Xử lý lệnh ghi mới (1-9)
+        if (input_value >= 1 && input_value <= 9) {
+            // Nếu đang ghi giá trị khác, dừng lại trước
+            if (is_writing) {
+                LOG_INFO << "[Continuous] Switching from writing to D10 " << input_value;
+                std::cout << "Stopping previous writing and starting new one..." << std::endl;
+                
+                should_stop_writing = true;
+                // if(current_writing_value != input_value){
+                //     for(int i = 0; i <= 9; i++ ){
+                //         std::string command = "WRITE_D10" + std::to_string(i) + "_" + std::to_string(0);
+                //         plc_command_queue.push(command);
+                //     }
+                // }
+
+                if (writing_thread && writing_thread->joinable()) {
+                    writing_thread->join();
+                }
+                // Thêm một khoảng nghỉ ngắn để đảm bảo PLC có thời gian xử lý các lệnh reset
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            
+            // Bắt đầu ghi giá trị mới
+            current_writing_value = input_value;
+            is_writing = true;
+            should_stop_writing = false;
+            
+            LOG_INFO << "[Continuous] Starting continuous write of value " << current_writing_value;
+            std::cout << "Starting continuous write of " << current_writing_value << "... to D"<< input_value<<"00" << std::endl;
+            
+            // Tạo thread mới để ghi liên tục
+            writing_thread = std::make_unique<std::thread>([&, input_value]() {
+                continuousWriteWorker(input_value, plc_command_queue, plc_result_queue, 
+                                    system_state, should_stop_writing);
+            });
+        }
     }
     
-    LOG_INFO << "[Keyboard Thread] Stopped";
+    // Cleanup khi thoát
+    if (is_writing) {
+        should_stop_writing = true;
+        if (writing_thread && writing_thread->joinable()) {
+            writing_thread->join();
+        }
+    }
+    
+    LOG_INFO << "[Continuous] Continuous write handler stopped";
 }
 
+
 /**
- * @brief Phiên bản non-blocking của keyboard input (không cần thread riêng)
- * Thêm vào main loop để kiểm tra input định kỳ
+ * @brief Thread function cho continuous write mode
+ * @param plc_command_queue Queue để gửi lệnh PLC
+ * @param plc_result_queue Queue để nhận kết quả từ PLC
+ * @param system_state Tham chiếu đến system state
  */
-void checkKeyboardInputNonBlocking(ThreadSafeQueue<std::string>& plc_command_queue,
-                                  ThreadSafeQueue<std::string>& plc_result_queue,
-                                  SystemState& system_state) {
+void continuous_write_thread(ThreadSafeQueue<std::string>& plc_command_queue,
+                            ThreadSafeQueue<std::string>& plc_result_queue,
+                            SystemState& system_state) {
     
-    static bool first_call = true;
-    if (first_call) {
-        LOG_INFO << "[Keyboard Thread]=== PLC Control Interface ===" ;
-        LOG_INFO << "[Keyboard Thread]Available commands:" ;
-        LOG_INFO << "[Keyboard Thread]  1 -> Write 1 to D100 (with safety check)" ;
-        LOG_INFO << "[Keyboard Thread]  2 -> Write 1 to D101" ;
-        LOG_INFO << "[Keyboard Thread]  3 -> Write 1 to D102" ;
-        LOG_INFO << "[Keyboard Thread]  4 -> Write 1 to D103" ;
-        LOG_INFO << "[Keyboard Thread]  q -> Quit program" ;
-        LOG_INFO << "[Keyboard Thread]==============================" ;
-        first_call = false;
+    LOG_INFO << "[Continuous Thread] Started";
+    
+    try {
+        continuousWriteHandler(plc_command_queue, plc_result_queue, system_state);
+    } catch (const std::exception& e) {
+        LOG_ERROR << "[Continuous Thread] Exception: " << e.what();
     }
     
-    // Kiểm tra xem có input từ stdin không (non-blocking)
-    fd_set read_fds;
-    struct timeval timeout;
-    
-    FD_ZERO(&read_fds);
-    FD_SET(STDIN_FILENO, &read_fds);
-    timeout.tv_sec = 0;
-    timeout.tv_usec = 0;
-    
-    int result = select(STDIN_FILENO + 1, &read_fds, NULL, NULL, &timeout);
-    
-    if (result > 0 && FD_ISSET(STDIN_FILENO, &read_fds)) {
-        char input;
-        if (std::cin >> input) {
-            if (input == 'q' || input == 'Q') {
-                LOG_INFO << "[Main] Quit command received";
-                global_running = false;
-                return;
-            }
-            
-            bool success = handleKeyboardInput(input, plc_command_queue, plc_result_queue, system_state);
-            
-            if (success) {
-                LOG_INFO << "[Keyboard Thread] Command executed successfully!" ;
-            } else {
-                LOG_ERROR << "[Keyboard Thread] Command failed, blocked, or invalid input!" ;
-            }
-            LOG_INFO << "[Keyboard Thread] Enter next command (1-4, q=quit): ";
-            std::cout.flush();
-        }
-    }
+    LOG_INFO << "[Continuous Thread] Stopped";
 }
 
 // Queue để truyền convex hull giữa các thread
@@ -561,14 +699,26 @@ void lidar_thread_func(
             
             // Gửi lệnh PLC ngay lập tức
             if (min_dist_cm > 50.0f) {
-                plc_command_queue.push("WRITE_D100_1");
+                {
+                    std::lock_guard<std::mutex> lock(state.state_mutex);
+                    state.is_safe_to_move = true;
+                    state.current_front_distance = min_dist_cm;
+                    state.last_safety_update = std::chrono::steady_clock::now().time_since_epoch().count();
+                }
+                //plc_command_queue.push("WRITE_D100_1");
                 // Debug output với màu xanh cho an toàn
                 LOG_INFO << "[REALTIME] Path clear: " << min_dist_cm << "cm";
 
             } else {
-                plc_command_queue.push("WRITE_D100_0");
+                //plc_command_queue.push("WRITE_D100_0");
                 // Debug output với màu đỏ cho cảnh báo
                 LOG_WARNING << "[REALTIME WARNING] Obstacle detected: " << min_dist_cm << "cm";
+                {
+                    std::lock_guard<std::mutex> lock(state.state_mutex);
+                    state.is_safe_to_move = false;
+                    state.current_front_distance = min_dist_cm;
+                    state.last_safety_update = std::chrono::steady_clock::now().time_since_epoch().count();
+                }
             }
             
             // Cập nhật state với thông tin realtime
@@ -749,11 +899,12 @@ int main() {
     // KHỞI CHẠY LUỒNG LIDAR
     std::thread lidar_thread(lidar_thread_func, std::ref(shared_state),
                            std::ref(stable_points_queue), std::ref(plc_command_queue));
-    // 3. KEYBOARD INPUT THREAD (MỚI THÊM)
-    std::thread keyboard_thread(keyboard_input_thread, 
-                               std::ref(plc_command_queue), 
-                               std::ref(plc_result_queue), 
-                               std::ref(shared_state));
+    // Keyboard continuous write thread
+    std::thread keyboard_thread(continuous_write_thread, 
+                                  std::ref(plc_command_queue), 
+                                  std::ref(plc_result_queue), 
+                                  std::ref(shared_state));
+
     //Server thread
     // std::thread webserver_thread(webserver_thread_func, std::ref(shared_state), std::ref(stable_points_queue));
     //Battery thread
