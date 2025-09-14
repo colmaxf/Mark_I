@@ -318,9 +318,8 @@ bool handleKeyboardInput(char input,
 
 /**
  * @brief Worker thread thực hiện việc ghi liên tục
- * @param value Giá trị cần ghi (1-9)
+ * @param command_id ID lệnh (1: Tiến, 2: Lùi, 3: Trái, 4: Phải)
  * @param plc_command_queue Queue để gửi lệnh PLC
- * @param plc_result_queue Queue để nhận kết quả từ PLC
  * @param system_state Tham chiếu đến system state
  * @param should_stop Atomic flag để dừng thread
  */
@@ -329,250 +328,295 @@ void continuousWriteWorker(int command_id,
                           SystemState& system_state,
                           std::atomic<bool>& should_stop) {
     
+    // Đăng ký context cho worker thread
+    std::string worker_name = "WRK" + std::to_string(command_id);
+    LOG_REGISTER_CONTEXT(worker_name.c_str(), "Worker Thread");
+    LOG_SET_CONTEXT(worker_name.c_str());
+
     LOG_INFO << "[Worker-" << command_id << "] Started.";
+    
+    // Đếm số lần ghi để log
+    int write_count = 0;
+    auto start_time = std::chrono::steady_clock::now();
+    
     while (!should_stop && global_running) {
-        bool is_safe = false;
-        {
-            std::lock_guard<std::mutex> lock(system_state.state_mutex);
-            is_safe = system_state.is_safe_to_move;
-        }
-is_safe = true; // Tạm bỏ kiểm tra an toàn cho lệnh xoay    
-        if (!is_safe) {
-            plc_command_queue.push("WRITE_D100_0");
-            LOG_ERROR << "[Worker-" << command_id << "] Path UNSAFE! Sending emergency STOP.";
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-            continue;
+        // Kiểm tra an toàn cho lệnh di chuyển tiến/lùi
+        if (command_id == 1 || command_id == 2) {
+            bool is_safe = false;
+            float front_distance = -1.0f;
+            {
+                std::lock_guard<std::mutex> lock(system_state.state_mutex);
+                is_safe = system_state.is_safe_to_move;
+                front_distance = system_state.current_front_distance;
+            }
+            is_safe =true; // BỎ KIỂM TRA AN TOÀN TẠM THỜI  
+            if (!is_safe) {
+                // Gửi lệnh dừng khẩn cấp
+                plc_command_queue.push("WRITE_D100_0");
+                LOG_WARNING << "[Worker-" << command_id << "] Path UNSAFE! Distance: " 
+                           << front_distance << "cm. Sending emergency STOP.";
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                continue;
+            }
+            
+            if (front_distance > 50 && front_distance <= 100 ) {
+                plc_command_queue.push("WRITE_D103_1"); // Bật còi cảnh báo
+                LOG_ERROR << "[Worker-" << command_id << "] Invalid front distance data. Sending emergency STOP.";
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                continue;
+            }else if (front_distance > 100) {
+                plc_command_queue.push("WRITE_D103_3"); // Gửi lệnh dừng
+                LOG_ERROR << "[Worker-" << command_id << "] Path too CLOSE! Distance: " 
+                           << front_distance << "cm. Sending emergency STOP.";
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                continue;
+            }
         }
         
-        // Gửi lệnh duy nhất tương ứng với ID của worker
+        // Gửi lệnh tương ứng với ID của worker
+        std::string command;
         switch(command_id) {
-            case 1: plc_command_queue.push("WRITE_D100_1"); break; // Tiến
-            case 2: plc_command_queue.push("WRITE_D100_2"); break; // Lùi
-            case 3: plc_command_queue.push("WRITE_D101_1"); break; // Xoay Trái
-            case 4: plc_command_queue.push("WRITE_D101_2"); break; // Xoay Phải
+            case 1: 
+                command = "WRITE_D100_1"; // Tiến
+                break;
+            case 2: 
+                command = "WRITE_D100_2"; // Lùi
+                break;
+            case 3: 
+                command = "WRITE_D101_1"; // Xoay Trái
+                break;
+            case 4: 
+                command = "WRITE_D101_2"; // Xoay Phải
+                break;
+            default:
+                LOG_ERROR << "[Worker-" << command_id << "] Invalid command ID!";
+                return;
         }
         
-        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Tần suất 10 Hz
+        plc_command_queue.push(command);
+        write_count++;
+        
+        // Log định kỳ mỗi 10 lần ghi
+        if (write_count % 10 == 0) {
+            auto current_time = std::chrono::steady_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::seconds>(current_time - start_time);
+            LOG_INFO << "[Worker-" << command_id << "] Sent " << write_count 
+                    << " commands in " << duration.count() << "s. Rate: " 
+                    << (float)write_count / (duration.count() + 1) << " Hz";
+        }
+        
+        // Tần suất gửi lệnh: 10Hz (100ms)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    LOG_INFO << "[Worker-" << command_id << "] Stopped.";
+    
+    // Gửi lệnh dừng khi kết thúc
+    if (command_id <= 2) {
+        plc_command_queue.push("WRITE_D100_0");
+    } else {
+        plc_command_queue.push("WRITE_D101_0");
+    }
+    
+    auto total_duration = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - start_time);
+    LOG_INFO << "[Worker-" << command_id << "] Stopped. Total commands: " << write_count 
+            << " in " << total_duration.count() << "s";
 }
 
 /**
- * @brief Luồng quản lý ("Người quản lý") điều khiển: lắng nghe bàn phím để điều phối các worker.
+ * @brief Luồng quản lý keyboard - lắng nghe bàn phím và điều phối các worker
  */
-void keyboard_control_thread(ThreadSafeQueue<std::string>& plc_command_queue, SystemState& system_state) {
-    LOG_INFO << "[Keyboard Manager] Started. Press WASD/Arrows to move. Press '0' to STOP. Press ESC to quit.";
+void keyboard_control_thread(ThreadSafeQueue<std::string>& plc_command_queue, 
+                            SystemState& system_state) {
+    
+    // Đăng ký context cho keyboard thread
+    LOG_REGISTER_CONTEXT("KEYB", "Keyboard Control Thread");
+    LOG_SET_CONTEXT("KEYB");
+    
+    LOG_INFO << "[Keyboard Manager] Started. Controls:";
+    LOG_INFO << "  W/↑ : Move Forward";
+    LOG_INFO << "  S/↓ : Move Backward";
+    LOG_INFO << "  A/← : Turn Left";
+    LOG_INFO << "  D/→ : Turn Right";
+    LOG_INFO << "  0   : Emergency STOP";
+    LOG_INFO << "  ESC : Exit program";
+    
+    std::cout << "\n=== KEYBOARD CONTROL ACTIVE ===" << std::endl;
+    std::cout << "W/↑: Forward | S/↓: Backward | A/←: Left | D/→: Right" << std::endl;
+    std::cout << "0: STOP | ESC: Exit" << std::endl;
+    std::cout << "================================\n" << std::endl;
     
     SimpleKeyboardListener listener;
     std::unique_ptr<std::thread> worker_thread;
     std::atomic<bool> stop_worker_flag{false};
     char active_key = 0;
-
+    
+    // Statistics tracking
+    int total_commands = 0;
+    auto session_start = std::chrono::steady_clock::now();
+    
     while (global_running) {
         char key = listener.getChar();
-
+        
         if (key != 0 && key != active_key) {
-            // BƯỚC 1: Luôn dừng worker cũ (nếu có) khi có lệnh mới
-            if (worker_thread) {
+            // BƯỚC 1: Dừng worker cũ khi có lệnh mới
+            if (worker_thread && worker_thread->joinable()) {
+                LOG_INFO << "[Keyboard Manager] Stopping previous worker for key '" << active_key << "'";
                 stop_worker_flag = true;
-                if (worker_thread->joinable()) {
-                    worker_thread->join();
-                }
-                // Gửi lệnh reset xoay khi dừng worker cũ để bánh xe thẳng lại
-                plc_command_queue.push("WRITE_D101_0");
+                worker_thread->join();
+                worker_thread.reset();
+                
+                // Reset bánh xe về trạng thái thẳng khi dừng xoay
+                 if (active_key == 'A' || active_key == 'D') {
+                    plc_command_queue.push("WRITE_D101_0");
+                    LOG_INFO << "[Keyboard Manager] Reset wheel direction to straight";
+                 }
             }
             
             active_key = key;
             int worker_command_id = 0;
-
+            
             switch (key) {
-                case 'W':
-                    worker_command_id = 1; // Worker sẽ liên tục gửi lệnh Tiến
+                case 'W': {
+                    LOG_INFO << "[Keyboard Manager] Forward (W) pressed";
+                    std::cout << "→ Moving FORWARD" << std::endl;
+                    worker_command_id = 1; // Worker sẽ liên tục gửi WRITE_D100_1
+                    total_commands++;
                     break;
-                case 'S':
-                    worker_command_id = 2; // Worker sẽ liên tục gửi lệnh Lùi
+                }
+                
+                case 'S': {
+                    LOG_INFO << "[Keyboard Manager] Backward (S) pressed";
+                    std::cout << "→ Moving BACKWARD" << std::endl;
+                    worker_command_id = 2; // Worker sẽ liên tục gửi WRITE_D100_2
+                    total_commands++;
                     break;
-                case 'A':
-                case 'D': {
+                }
+                
+                case 'A': {
+                    LOG_INFO << "[Keyboard Manager] Turn Left (A) pressed";
+                    std::cout << "→ Turning LEFT" << std::endl;
+                    
+                    // Kiểm tra an toàn trước khi xoay
                     bool is_safe = false;
                     {
                         std::lock_guard<std::mutex> lock(system_state.state_mutex);
                         is_safe = system_state.is_safe_to_move;
                     }
-                    is_safe = true; // Tạm bỏ kiểm tra an toàn cho lệnh xoay
+                    
                     if (is_safe) {
-                        // Gửi lệnh Tiến MỘT LẦN
+                        // Gửi lệnh tiến MỘT LẦN trước khi xoay
                         plc_command_queue.push("WRITE_D100_1");
-                        LOG_INFO << "[Keyboard Manager] Sent single FORWARD for turn command '" << key << "'.";
-                        // Chuẩn bị khởi động worker Xoay
-                        worker_command_id = (key == 'A') ? 3 : 4;
+                        LOG_INFO << "[Keyboard Manager] Sent single FORWARD command before turning left";
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        
+                        worker_command_id = 3; // Worker sẽ liên tục gửi WRITE_D101_1
                     } else {
+                        LOG_WARNING << "[Keyboard Manager] Cannot turn - path not safe!";
+                        std::cout << "❌ Cannot turn - obstacle detected!" << std::endl;
                         plc_command_queue.push("WRITE_D100_0");
-                        LOG_ERROR << "[Keyboard Manager] Path UNSAFE! Aborting turn command '" << key << "'.";
+                        active_key = 0;
                     }
+                    total_commands++;
                     break;
                 }
-                case '0':
+                
+                case 'D': {
+                    LOG_INFO << "[Keyboard Manager] Turn Right (D) pressed";
+                    std::cout << "→ Turning RIGHT" << std::endl;
+                    
+                    // Kiểm tra an toàn trước khi xoay
+                    bool is_safe = false;
+                    {
+                        std::lock_guard<std::mutex> lock(system_state.state_mutex);
+                        is_safe = system_state.is_safe_to_move;
+                    }
+                    
+                    if (is_safe) {
+                        // Gửi lệnh tiến MỘT LẦN trước khi xoay
+                        plc_command_queue.push("WRITE_D100_1");
+                        LOG_INFO << "[Keyboard Manager] Sent single FORWARD command before turning right";
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        
+                        worker_command_id = 4; // Worker sẽ liên tục gửi WRITE_D101_2
+                    } else {
+                        LOG_WARNING << "[Keyboard Manager] Cannot turn - path not safe!";
+                        std::cout << " Cannot turn - obstacle detected!" << std::endl;
+                        plc_command_queue.push("WRITE_D100_0");
+                        active_key = 0;
+                    }
+                    total_commands++;
+                    break;
+                }
+                
+                case '0': {
+                    LOG_INFO << "[Keyboard Manager] EMERGENCY STOP (0) pressed";
+                    std::cout << " EMERGENCY STOP!" << std::endl;
+                    
+                    // Gửi lệnh dừng cho cả di chuyển và xoay
                     plc_command_queue.push("WRITE_D100_0");
                     plc_command_queue.push("WRITE_D101_0");
-                    LOG_INFO << "[Keyboard Manager] MANUAL STOP ('0') pressed.";
-                    active_key = 0; 
+                    
+                    active_key = 0;
+                    worker_command_id = 0; // Không khởi động worker mới
                     break;
-                case 27:
-                    LOG_INFO << "[Keyboard Manager] ESC pressed. Shutting down.";
+                }
+                
+                case 27: { // ESC key
+                    LOG_INFO << "[Keyboard Manager] ESC pressed - shutting down";
+                    std::cout << "\nESC key pressed - Shutting down..." << std::endl;
+                    
+                    // Dừng an toàn trước khi thoát
+                    plc_command_queue.push("WRITE_D100_0");
+                    plc_command_queue.push("WRITE_D101_0");
+                    
                     global_running = false;
                     break;
+                }
+                
+                default:
+                    // Phím không hợp lệ - bỏ qua
+                    active_key = 0;
+                    break;
             }
-
+            
             // BƯỚC 3: Khởi động worker mới nếu có command_id hợp lệ
             if (worker_command_id > 0) {
-                LOG_INFO << "[Keyboard Manager] Starting new worker for key '" << key << "' (ID: " << worker_command_id << ").";
+                LOG_INFO << "[Keyboard Manager] Starting worker for command ID: " << worker_command_id;
                 stop_worker_flag = false;
+                
                 worker_thread = std::make_unique<std::thread>(
-                    continuousWriteWorker, worker_command_id, 
-                    std::ref(plc_command_queue), std::ref(system_state), std::ref(stop_worker_flag)
+                    continuousWriteWorker, 
+                    worker_command_id,
+                    std::ref(plc_command_queue), 
+                    std::ref(system_state), 
+                    std::ref(stop_worker_flag)
                 );
             }
         }
+        
+        // Delay ngắn để tránh busy waiting
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-
-    // Dọn dẹp khi thoát
-    if (worker_thread) {
+    
+    // Cleanup khi thoát
+    LOG_INFO << "[Keyboard Manager] Shutting down - cleaning up workers";
+    
+    if (worker_thread && worker_thread->joinable()) {
         stop_worker_flag = true;
-        if (worker_thread->joinable()) {
-            worker_thread->join();
-        }
+        worker_thread->join();
     }
+    
+    // Gửi lệnh dừng cuối cùng
     plc_command_queue.push("WRITE_D100_0");
     plc_command_queue.push("WRITE_D101_0");
-    LOG_INFO << "[Keyboard Manager] Stopped. Final stop commands sent.";
+    
+    auto session_duration = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - session_start);
+    
+    LOG_INFO << "[Keyboard Manager] Session ended. Total commands: " << total_commands 
+            << " in " << session_duration.count() << " seconds";
+    std::cout << "\nSession ended. Total commands: " << total_commands << std::endl;
 }
-/**
- * @brief Hàm xử lý ghi liên tục dữ liệu từ bàn phím
- * @param plc_command_queue Queue để gửi lệnh PLC
- * @param plc_result_queue Queue để nhận kết quả từ PLC
- * @param system_state Tham chiếu đến system state để kiểm tra dữ liệu LiDAR
- */
-// void continuousWriteHandler(ThreadSafeQueue<std::string>& plc_command_queue,
-//                            ThreadSafeQueue<std::string>& plc_result_queue,
-//                            SystemState& system_state) {
-    
-//     std::cout << "\n=== Continuous Write Mode ===" << std::endl;
-//     std::cout << "Enter a number (1-9) to start continuous writing" << std::endl;
-//     std::cout << "Enter 0 to stop current writing and return to menu" << std::endl;
-//     std::cout << "==============================\n" << std::endl;
-    
-//     int input_value = -1;
-//     int current_writing_value = 0;  // Giá trị đang được ghi liên tục
-//     bool is_writing = false;        // Cờ báo hiệu có đang ghi liên tục không
-//     std::atomic<bool> should_stop_writing{false};
-//     std::unique_ptr<std::thread> writing_thread;
-    
-//     while (global_running) {
-//         std::cout << "Enter number (1-9 to start writing, 0 to stop): ";
-//         std::cin >> input_value;
-        
-//         // Kiểm tra input hợp lệ
-//         if (input_value < 0 || input_value > 9) {
-//             std::cout << "Invalid input! Please enter 0-9." << std::endl;
-//             continue;
-//         }
-        
-//         // Xử lý lệnh dừng (0)
-//         if (input_value == 0) {
-//             if (is_writing) {
-//                 LOG_INFO << "[Continuous] Stop command received. Stopping continuous write of value " << current_writing_value;
-//                 std::cout << "Stopping continuous write..." << std::endl;
-//                 for(int i = 0; i <= 9; i++ ){
-//                     std::string command = "WRITE_D10" + std::to_string(i) + "_" + std::to_string(0);
-//                     plc_command_queue.push(command);
-//                 }
-//                 // Dừng thread ghi liên tục
-//                 should_stop_writing = true;
-//                 if (writing_thread && writing_thread->joinable()) {
-//                     writing_thread->join();
-//                 }
-                
-//                 is_writing = false;
-//                 current_writing_value = 0;
-//                 std::cout << "Continuous writing stopped." << std::endl;
-//             } else {
-//                 std::cout << "No continuous writing in progress." << std::endl;
-//             }
-//             continue;
-//         }
-        
-//         // Xử lý lệnh ghi mới (1-9)
-//         if (input_value >= 1 && input_value <= 9) {
-//             // Nếu đang ghi giá trị khác, dừng lại trước
-//             if (is_writing) {
-//                 LOG_INFO << "[Continuous] Switching from writing to D10 " << input_value;
-//                 std::cout << "Stopping previous writing and starting new one..." << std::endl;
-                
-//                 should_stop_writing = true;
-//                 // if(current_writing_value != input_value){
-//                 //     for(int i = 0; i <= 9; i++ ){
-//                 //         std::string command = "WRITE_D10" + std::to_string(i) + "_" + std::to_string(0);
-//                 //         plc_command_queue.push(command);
-//                 //     }
-//                 // }
-
-//                 if (writing_thread && writing_thread->joinable()) {
-//                     writing_thread->join();
-//                 }
-//                 // Thêm một khoảng nghỉ ngắn để đảm bảo PLC có thời gian xử lý các lệnh reset
-//                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
-//             }
-            
-//             // Bắt đầu ghi giá trị mới
-//             current_writing_value = input_value;
-//             is_writing = true;
-//             should_stop_writing = false;
-            
-//             LOG_INFO << "[Continuous] Starting continuous write of value " << current_writing_value;
-//             std::cout << "Starting continuous write of " << current_writing_value << "... to D"<< input_value<<"00" << std::endl;
-            
-//             // Tạo thread mới để ghi liên tục
-//             writing_thread = std::make_unique<std::thread>([&, input_value]() {
-//                 continuousWriteWorker(input_value, plc_command_queue, plc_result_queue, 
-//                                     system_state, should_stop_writing);
-//             });
-//         }
-//     }
-    
-//     // Cleanup khi thoát
-//     if (is_writing) {
-//         should_stop_writing = true;
-//         if (writing_thread && writing_thread->joinable()) {
-//             writing_thread->join();
-//         }
-//     }
-    
-//     LOG_INFO << "[Continuous] Continuous write handler stopped";
-// }
-
-
-// /**
-//  * @brief Thread function cho continuous write mode
-//  * @param plc_command_queue Queue để gửi lệnh PLC
-//  * @param plc_result_queue Queue để nhận kết quả từ PLC
-//  * @param system_state Tham chiếu đến system state
-//  */
-// void continuous_write_thread(ThreadSafeQueue<std::string>& plc_command_queue,
-//                             ThreadSafeQueue<std::string>& plc_result_queue,
-//                             SystemState& system_state) {
-    
-//     LOG_INFO << "[Continuous Thread] Started";
-    
-//     try {
-//         continuousWriteHandler(plc_command_queue, plc_result_queue, system_state);
-//     } catch (const std::exception& e) {
-//         LOG_ERROR << "[Continuous Thread] Exception: " << e.what();
-//     }
-    
-//     LOG_INFO << "[Continuous Thread] Stopped";
-// }
 
 // Queue để truyền convex hull giữa các thread
 // Communication queues
