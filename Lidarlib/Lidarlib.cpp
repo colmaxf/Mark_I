@@ -448,8 +448,8 @@ LidarProcessor::LidarProcessor(const string& local_ip, const string& local_port,
                                              const string& laser_ip, const string& laser_port)
     : local_ip(local_ip), local_port(local_port), laser_ip(laser_ip), laser_port(laser_port),
       is_running(false), is_processing(false), total_scans(0), valid_scans(0), 
-      stable_scans(0), average_points_per_scan(0), processing_rate(0) /*,INIT_MODULE_LOGGER("LIDA")*/ {
-    
+      stable_scans(0), average_points_per_scan(0), processing_rate(0) {
+
     LOG_INFO << "[LIDAR-RT] LidarProcessor instance created.";
 
     // Khởi tạo các thành phần xử lý
@@ -743,15 +743,15 @@ void LidarProcessor::updateProcessingRate() {
  * @brief In ra các thông tin trạng thái và hiệu suất của LidarProcessor.
  */
 void LidarProcessor::printStatus() const {
-         LOG_INFO << "--- LiDAR Processor Status ---";
-         LOG_INFO << "Total Scans: " << total_scans.load();
-         LOG_INFO << "Valid Scans: " << valid_scans.load();
-         LOG_INFO << "Stable Scans: " << stable_scans.load();
-         LOG_INFO << "Processing Rate: " << processing_rate.load() << " Hz";
-         LOG_INFO << "Data Validity: " << getDataValidityRatio() * 100 << "%";
-         LOG_INFO << "Stability Score: " << getStabilityScore();
-         LOG_INFO << "Uptime: " << getUptime() << " seconds";
-         LOG_INFO << "-------------------------------";
+         LOG_INFO << "[LIDAR-RT] --- LiDAR Processor Status ---";
+         LOG_INFO << "[LIDAR-RT] Total Scans: " << total_scans.load();
+         LOG_INFO << "[LIDAR-RT] Valid Scans: " << valid_scans.load();
+         LOG_INFO << "[LIDAR-RT] Stable Scans: " << stable_scans.load();
+         LOG_INFO << "[LIDAR-RT] Processing Rate: " << processing_rate.load() << " Hz";
+         LOG_INFO << "[LIDAR-RT] Data Validity: " << getDataValidityRatio() * 100 << "%";
+         LOG_INFO << "[LIDAR-RT] Stability Score: " << getStabilityScore();
+         LOG_INFO << "[LIDAR-RT] Uptime: " << getUptime() << " seconds";
+         LOG_INFO << "[LIDAR-RT] -------------------------------";
 }
 
 /**

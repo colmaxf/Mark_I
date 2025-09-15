@@ -155,11 +155,11 @@ private:
     mutable std::mutex callback_mutex;
     
 public:
-    LidarProcessor(const std::string& local_ip = "192.168.3.10",
-                    const std::string& local_port = "2368", 
-                    const std::string& laser_ip = "192.168.3.101",
-                    const std::string& laser_port = "2368");
-    
+    LidarProcessor(const std::string& local_ip = LIDAR_HOST_IP,
+                    const std::string& local_port = std::to_string(LIDAR_PORT),
+                    const std::string& laser_ip = LIDAR_CLIENT_IP,
+                    const std::string& laser_port = std::to_string(LIDAR_CLIENT_PORT));
+
     ~LidarProcessor();
     
     // Initialization
@@ -202,8 +202,7 @@ public:
     void pauseProcessing();
     void resumeProcessing();
     void resetStatistics();
-    // Module logger - TỰ ĐỘNG QUẢN LÝ APP_ID
-    //DECLARE_MODULE_LOGGER()
+
     
 private:
     // Main processing loop
@@ -254,11 +253,11 @@ namespace LidarUtils {
 // Configuration structure
 struct LidarConfig {
     // Network settings
-    std::string local_ip = "192.168.3.10";
-    std::string local_port = "2368";
-    std::string laser_ip = "192.168.3.101";  
-    std::string laser_port = "2368";
-    
+    std::string local_ip = LIDAR_HOST_IP;
+    std::string local_port = std::to_string(LIDAR_PORT);
+    std::string laser_ip = LIDAR_CLIENT_IP;
+    std::string laser_port = std::to_string(LIDAR_CLIENT_PORT);
+
     // Processing settings
     int buffer_size = 100;
     int stabilizer_window = 5;

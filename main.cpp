@@ -789,7 +789,7 @@ void lidar_thread_func(
     std::string lidar_host_ip = LIDAR_HOST_IP;
     std::string lidar_port = std::to_string(LIDAR_PORT);
     std::string lidar_client_ip = LIDAR_CLIENT_IP; 
-    std::string lidar_client_port = std::to_string(LIDAR_PORT);
+    std::string lidar_client_port = std::to_string(LIDAR_CLIENT_PORT);
 
     auto lidar_processor = std::unique_ptr<LidarProcessor>(new LidarProcessor(lidar_host_ip, lidar_port, lidar_client_ip, lidar_client_port));
 
@@ -1023,19 +1023,9 @@ int main() {
 
     // Initialize logger
 // Lấy instance duy nhất của Logger (singleton)
-    Logger& logger = Logger::get_instance();
+    // Logger& logger = Logger::get_instance();
     
-    // Configure logging
-    // logger.set_log_directory("./logger/log/");
-    // logger.set_max_file_count(15);
-    // logger.set_max_file_size(100); // 100MB per file
 
-    // // IMPORTANT: Enable both offline and network logging
-    // // Or use combined mode:
-    //  //logger.set_log_mode(2); // 2 = BOTH (file + network)
-
-    //  logger.enable_offline_logging(true);  // Save to .dlt files
-    //  logger.enable_network_logging(true, "0.0.0.0", 3490); // Enable network access
     
 
     
