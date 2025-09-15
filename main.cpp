@@ -63,8 +63,8 @@ private:
     std::condition_variable m_cond;
 };
 
-
-// Thêm vào đầu file sau các include
+//------------------------------------- Global variables-------------------------------------//
+// Biến để đảm bảo khởi tạo hệ thống chỉ một lần
 std::atomic<bool> system_initialized{false};
 std::shared_ptr<MCProtocol> global_plc_ptr;  // Shared pointer cho PLC
 std::mutex plc_ptr_mutex;  // Mutex để bảo vệ truy cập
@@ -72,6 +72,53 @@ std::mutex plc_ptr_mutex;  // Mutex để bảo vệ truy cập
 std::string last_movement_command = "";
 std::mutex last_command_mutex;
 
+// Biến toàn cục để điều khiển việc dừng các luồng một cách an toàn
+std::atomic<bool> global_running{true};
+// Cấu trúc Point2D đơn giản để tương thích với SystemState
+struct Point2D {
+    float x, y;
+};
+// SYSTEM STATE STRUCT
+struct SystemState {
+    std::mutex state_mutex;
+
+     // Battery data
+    double battery_level = 0.0;
+    
+    // PLC data
+    bool plc_connected = false;
+    std::string last_plc_status = "Chưa có dữ liệu PLC";
+
+
+    // LiDAR data
+    std::string last_lidar_data = "Chưa có dữ liệu Lidar";
+    bool lidar_connected = false;
+    std::vector<Point2D> latest_convex_hull;
+    int total_stable_hulls = 0;
+    int total_scan_count = 0;
+
+    // Safety data
+    bool is_safe_to_move = false;           // Cờ an toàn từ LiDAR realtime
+    float current_front_distance = -1.0f;  // Khoảng cách phía trước hiện tại (cm)
+    long last_safety_update = 0;           // Timestamp cập nhật an toàn cuối cùng
+
+    //Tracking cho smooth acceleration
+    bool is_moving = false;
+    std::chrono::steady_clock::time_point movement_start_time;
+    int current_speed = 0;
+    int target_speed = 0;
+    // SLAM mapping data
+    std::vector<std::vector<Point2D>> global_map_hulls;
+    long last_hull_timestamp = 0;
+
+};
+
+// Queue để truyền convex hull giữa các thread
+// Communication queues
+ThreadSafeQueue<std::vector<Point2D>> stable_points_queue;
+ThreadSafeQueue<std::string> lidar_status_queue;
+
+//-----------------------------------------------------------------------------//
 
 // --- LỚP KEYBOARD LISTENER ---
 class SimpleKeyboardListener {
@@ -186,42 +233,6 @@ std::string parseAndExecutePlcCommand(const std::string& command, MCProtocol& pl
     return "Unexpected error";
 };
 
-// Biến toàn cục để điều khiển việc dừng các luồng một cách an toàn
-std::atomic<bool> global_running{true};
-// Cấu trúc Point2D đơn giản để tương thích với SystemState
-struct Point2D {
-    float x, y;
-};
-// SYSTEM STATE STRUCT
-struct SystemState {
-    std::mutex state_mutex;
-
-     // Battery data
-    double battery_level = 0.0;
-    
-    // PLC data
-    bool plc_connected = false;
-    std::string last_plc_status = "Chưa có dữ liệu PLC";
-
-
-    // LiDAR data
-    std::string last_lidar_data = "Chưa có dữ liệu Lidar";
-    bool lidar_connected = false;
-    std::vector<Point2D> latest_convex_hull;
-    int total_stable_hulls = 0;
-    int total_scan_count = 0;
-
-    // THÊM CÁC TRƯỜNG MỚI
-    bool is_safe_to_move = false;           // Cờ an toàn từ LiDAR realtime
-    float current_front_distance = -1.0f;  // Khoảng cách phía trước hiện tại (cm)
-    long last_safety_update = 0;           // Timestamp cập nhật an toàn cuối cùng
-    
-    // SLAM mapping data
-    std::vector<std::vector<Point2D>> global_map_hulls;
-    long last_hull_timestamp = 0;
-
-};
-
 
 /**
  * @brief Hàm khởi tạo hệ thống - gửi lệnh D110_1 khi bắt đầu (CHỈ MỘT LẦN)
@@ -242,6 +253,67 @@ void initializeSystem(ThreadSafeQueue<std::string>& plc_command_queue,
     } else {
         LOG_INFO << "[System Init] Already initialized, skipping D110_1";
     }
+}
+
+double calculateSpeed(double distance) {
+    // Đảm bảo khoảng cách nằm trong range [50, 400]
+    distance = std::max(50.0, std::min(400.0, distance));
+    
+    // Hàm ánh xạ tuyến tính: y = y1 + ((x - x1) * (y2 - y1)) / (x2 - x1)
+    if (distance >= 50.0 && distance < 100.0) {
+        // Khoảng 50-100 cm ánh xạ tốc độ 0-500
+        return 0.0 + ((distance - 50.0) * (500.0 - 0.0)) / (100.0 - 50.0);
+    } else if (distance >= 100.0 && distance < 200.0) {
+        // Khoảng 100-200 cm ánh xạ tốc độ 500-1500
+        return 500.0 + ((distance - 100.0) * (1500.0 - 500.0)) / (200.0 - 100.0);
+    } else if (distance >= 200.0 && distance < 300.0) {
+        // Khoảng 200-300 cm ánh xạ tốc độ 1500-2500
+        return 1500.0 + ((distance - 200.0) * (2500.0 - 1500.0)) / (300.0 - 200.0);
+    } else {
+        // Khoảng 300-400 cm ánh xạ tốc độ 2500-3000
+        return 2500.0 + ((distance - 300.0) * (3000.0 - 2500.0)) / (400.0 - 300.0);
+    }
+}
+
+int calculateSmoothSpeed(SystemState& state, float distance_cm) {
+    // Tính tốc độ mục tiêu dựa trên khoảng cách
+    int target = calculateSpeed(distance_cm);
+    
+    // Nếu vừa bắt đầu di chuyển
+    if (!state.is_moving && target > 0) {
+        state.is_moving = true;
+        state.movement_start_time = std::chrono::steady_clock::now();
+        state.current_speed = 0;
+    }
+    
+    // Nếu đang di chuyển
+    if (state.is_moving) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - state.movement_start_time
+        ).count();
+        
+        // Tăng tốc dần trong 2 giây đầu
+        if (elapsed < 2000) {
+            float ramp_factor = elapsed / 2000.0f;  // 0 -> 1 trong 2 giây
+            state.current_speed = static_cast<int>(target * ramp_factor);
+        } else {
+            // Điều chỉnh mượt về tốc độ mục tiêu
+            int speed_diff = target - state.current_speed;
+            if (abs(speed_diff) > 5) {
+                state.current_speed += (speed_diff > 0) ? 5 : -5;  // +/-5 mỗi lần
+            } else {
+                state.current_speed = target;
+            }
+        }
+    }
+    
+    // Reset khi dừng
+    if (target == 0) {
+        state.is_moving = false;
+        state.current_speed = 0;
+    }
+    
+    return state.current_speed;
 }
 
 /**
@@ -357,13 +429,11 @@ void safety_monitor_thread(ThreadSafeQueue<std::string>& plc_command_queue,
         // 2. Chuyển từ NGUY HIỂM sang AN TOÀN -> TỰ ĐỘNG RESUME
         else if (!was_safe && is_safe) {
             LOG_INFO << "[Safety Monitor] Path clear again - Distance: " << front_distance << "cm. Checking for command to resume...";
-            std::cout << "\n✅ Path clear - Distance: " << front_distance << "cm" << std::endl;
 
             // Đọc và gửi lại lệnh cuối cùng nếu có
             std::lock_guard<std::mutex> lock(last_command_mutex);
             if (!last_movement_command.empty()) {
                 LOG_INFO << "[Safety Monitor] Resuming last command: " << last_movement_command;
-                std::cout << "🔄 Resuming: " << last_movement_command << std::endl;
                 plc_command_queue.push(last_movement_command);
             }
         }
@@ -382,6 +452,8 @@ void safety_monitor_thread(ThreadSafeQueue<std::string>& plc_command_queue,
     LOG_INFO << "[Safety Monitor] Stopped";
 }
 
+
+
 /**
  * @brief Worker thread thực hiện việc ghi liên tục
  * @param command_id ID lệnh (1: Tiến, 2: Lùi, 3: Trái, 4: Phải)
@@ -389,114 +461,115 @@ void safety_monitor_thread(ThreadSafeQueue<std::string>& plc_command_queue,
  * @param system_state Tham chiếu đến system state
  * @param should_stop Atomic flag để dừng thread
  */
-void continuousWriteWorker(int command_id,
-                          ThreadSafeQueue<std::string>& plc_command_queue,
-                          ThreadSafeQueue<std::string>& plc_result_queue,
-                          SystemState& system_state,
-                          std::atomic<bool>& should_stop) {
+// void continuousWriteWorker(int command_id,
+//                           ThreadSafeQueue<std::string>& plc_command_queue,
+//                           ThreadSafeQueue<std::string>& plc_result_queue,
+//                           SystemState& system_state,
+//                           std::atomic<bool>& should_stop) {
     
-    // Đăng ký context cho worker thread
-    std::string worker_name = "WRK" + std::to_string(command_id);
-    LOG_REGISTER_CONTEXT(worker_name.c_str(), "Worker Thread");
-    LOG_SET_CONTEXT(worker_name.c_str());
+//     // Đăng ký context cho worker thread
+//     std::string worker_name = "WRK" + std::to_string(command_id);
+//     LOG_REGISTER_CONTEXT(worker_name.c_str(), "Worker Thread");
+//     LOG_SET_CONTEXT(worker_name.c_str());
     
-    LOG_INFO << "[Worker-" << command_id << "] Started.";
+//     LOG_INFO << "[Worker-" << command_id << "] Started.";
     
-    int write_count = 0;
-    auto start_time = std::chrono::steady_clock::now();
+//     int write_count = 0;
+//     auto start_time = std::chrono::steady_clock::now();
     
-    // Kiểm tra D102 một lần khi bắt đầu
-    if (!checkAndHandleD102(plc_command_queue, plc_result_queue)) {
-        LOG_ERROR << "[Worker-" << command_id << "] D102 check failed, stopping";
-        return;
-    }
+//     // Kiểm tra D102 một lần khi bắt đầu
+//     if (!checkAndHandleD102(plc_command_queue, plc_result_queue)) {
+//         LOG_ERROR << "[Worker-" << command_id << "] D102 check failed, stopping";
+//         return;
+//     }
         
-    while (!should_stop && global_running) {
-        // Kiểm tra an toàn cho lệnh di chuyển tiến/lùi
-        bool is_safe = false;
-        float front_distance = -1.0f;
-        {
-            std::lock_guard<std::mutex> lock(system_state.state_mutex);
-            is_safe = system_state.is_safe_to_move;
-            front_distance = system_state.current_front_distance;
-        }
+//     while (!should_stop && global_running) {
+//         // Kiểm tra an toàn cho lệnh di chuyển tiến/lùi
+//         bool is_safe = false;
+//         float front_distance = -1.0f;
+//         {
+//             std::lock_guard<std::mutex> lock(system_state.state_mutex);
+//             is_safe = system_state.is_safe_to_move;
+//             front_distance = system_state.current_front_distance;
+//         }
         
-        // Kiểm tra an toàn cho lệnh di chuyển tiến/lùi
-        if (command_id == 1 /*|| command_id == 2*/) {
-            // ✅ FIXED: Xử lý logic an toàn chính xác
-            if (!is_safe) {
-                // NGUY HIỂM: Gửi lệnh dừng ngay lập tức
-                plc_command_queue.push("WRITE_D100_0");
-                LOG_WARNING << "[Worker-" << command_id << "] Path UNSAFE! Distance: " 
-                           << front_distance << "cm. Sending emergency STOP.";
+//         // Kiểm tra an toàn cho lệnh di chuyển tiến/lùi
+//         if (command_id == 1) {
+//             // Xử lý logic an toàn chính xác
+//             if (!is_safe) {
+//                 // NGUY HIỂM: Gửi lệnh dừng ngay lập tức
+//                 plc_command_queue.push("WRITE_D100_0");
+//                 LOG_WARNING << "[Worker-" << command_id << "] Path UNSAFE! Distance: " 
+//                            << front_distance << "cm. Sending emergency STOP.";
                 
-                // ✅ FIXED: Thêm delay dài hơn để đảm bảo robot dừng
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                continue; // Bỏ qua việc gửi lệnh di chuyển
-            }
+//                 // ✅ FIXED: Thêm delay dài hơn để đảm bảo robot dừng
+//                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
+//                 continue; // Bỏ qua việc gửi lệnh di chuyển
+//             }
             
-            // ✅ FIXED: Xử lý giảm tốc độ khi gần vật cản
-            if (front_distance > 50 && front_distance <= 100) {
-                plc_command_queue.push("WRITE_D103_0"); // Giảm tốc độ
-                LOG_WARNING << "[Worker-" << command_id << "] WARNING: Object at " 
-                           << front_distance << "cm! Slowing down.";
-            } else if (front_distance > 100 || front_distance < 0) {
-                plc_command_queue.push("WRITE_D103_0"); // Tốc độ bình thường
-            }
+//             // ✅ FIXED: Xử lý giảm tốc độ khi gần vật cản
+//             if (front_distance > EMERGENCY_STOP_DISTANCE_CM && front_distance <= WARNING_DISTANCE_CM) {
+//                 std::string command = "WRITE_D103_"+ ; // Giảm tốc độ
+//                 plc_command_queue.push("WRITE_D103_0"); // Giảm tốc độ
+//                 LOG_WARNING << "[Worker-" << command_id << "] WARNING: Object at " 
+//                            << front_distance << "cm! Slowing down.";
+//             } else if (front_distance > WARNING_DISTANCE_CM) {
+//                 plc_command_queue.push("WRITE_D103_0"); // Tốc độ bình thường
+//             }
 
-       }
+//        }
     
         
          
 
-        // Gửi lệnh tương ứng với ID của worker
-        std::string command;
-        switch(command_id) {
-            case 1: 
-                if (is_safe) {
-                    command = "WRITE_D100_1"; // Tiến
-                } else {
-                    command = "WRITE_D100_0"; // Dừng
-                }
-                break;
-            case 2: 
-                //if (is_safe) {
-                    command = "WRITE_D100_2"; // Lùi  
-                //} else {
-                 //   command = "WRITE_D100_0"; // Dừng
-                //}
-                break;
-            case 3: command = "WRITE_D101_1"; break;  // Xoay Trái
-            case 4: command = "WRITE_D101_2"; break;  // Xoay Phải
-            default:
-                LOG_ERROR << "[Worker-" << command_id << "] Invalid command ID!";
-                return;
-        }
+//         // Gửi lệnh tương ứng với ID của worker
+//         std::string command;
+//         switch(command_id) {
+//             case 1: 
+//                 if (is_safe) {
+//                     command = "WRITE_D100_1"; // Tiến
+//                 } else {
+//                     command = "WRITE_D100_0"; // Dừng
+//                 }
+//                 break;
+//             case 2: 
+//                 //if (is_safe) {
+//                     command = "WRITE_D100_2"; // Lùi  
+//                 //} else {
+//                  //   command = "WRITE_D100_0"; // Dừng
+//                 //}
+//                 break;
+//             case 3: command = "WRITE_D101_1"; break;  // Xoay Trái
+//             case 4: command = "WRITE_D101_2"; break;  // Xoay Phải
+//             default:
+//                 LOG_ERROR << "[Worker-" << command_id << "] Invalid command ID!";
+//                 return;
+//         }
         
-        plc_command_queue.push(command);
-        write_count++;
+//         plc_command_queue.push(command);
+//         write_count++;
         
-        // Đợi phản hồi từ PLC
-        std::string response;
-        if (plc_result_queue.pop(response, 100)) {
-            if (write_count % 10 == 0) {
-                LOG_DEBUG << "[Worker-" << command_id << "] Response: " << response;
-            }
-        }
+//         // Đợi phản hồi từ PLC
+//         std::string response;
+//         if (plc_result_queue.pop(response, 100)) {
+//             if (write_count % 10 == 0) {
+//                 LOG_DEBUG << "[Worker-" << command_id << "] Response: " << response;
+//             }
+//         }
         
-        // Tần suất gửi lệnh: 10Hz
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
+//         // Tần suất gửi lệnh: 10Hz
+//         std::this_thread::sleep_for(std::chrono::milliseconds(200));
+//     }
     
-    // Gửi lệnh dừng khi kết thúc
-    if (command_id <= 2) {
-        plc_command_queue.push("WRITE_D100_0");
-    } else {
-        plc_command_queue.push("WRITE_D101_0");
-    }
+//     // Gửi lệnh dừng khi kết thúc
+//     if (command_id <= 2) {
+//         plc_command_queue.push("WRITE_D100_0");
+//     } else {
+//         plc_command_queue.push("WRITE_D101_0");
+//     }
     
-    LOG_INFO << "[Worker-" << command_id << "] Stopped. Total commands: " << write_count;
-}
+//     LOG_INFO << "[Worker-" << command_id << "] Stopped. Total commands: " << write_count;
+// }
 
 /**
  * @brief PLC Thread Function (UPDATED)
@@ -618,10 +691,6 @@ void keyboard_control_thread(ThreadSafeQueue<std::string>& plc_command_queue,
                             SystemState& system_state) {
     
     
-    // Đăng ký context cho keyboard thread
-    LOG_REGISTER_CONTEXT("KEYB", "Keyboard Control Thread");
-    LOG_SET_CONTEXT("KEYB");
-
     if (!system_initialized) {
         initializeSystem(plc_command_queue, plc_result_queue);
         std::string result;
@@ -642,9 +711,6 @@ void keyboard_control_thread(ThreadSafeQueue<std::string>& plc_command_queue,
     std::cout << "================================\n" << std::endl;
     
     SimpleKeyboardListener listener;
-    // std::unique_ptr<std::thread> worker_thread;
-    // std::atomic<bool> stop_worker_flag{false};
-    // char active_key = 0;
     
     // Statistics tracking
     int total_commands = 0;
@@ -667,22 +733,34 @@ void keyboard_control_thread(ThreadSafeQueue<std::string>& plc_command_queue,
             switch (key) {
                 case 'W': {
                     if (!checkAndHandleD102(plc_command_queue, plc_result_queue)) break;
-                    
+                    std::string cmd = "WRITE_D100_1";
+    
+                     // Luôn lưu ý định di chuyển
+                    {
+                       std::lock_guard<std::mutex> lock(last_command_mutex);
+                       last_movement_command = cmd;
+                    }
+               
                     if (is_safe) {
-                        std::cout << "→ Moving FORWARD" << std::endl;
+                        LOG_INFO << "Moving FORWARD" ;
+
+                        // Reset tốc độ về 0 trước khi bắt đầu
+                        plc_command_queue.push("WRITE_D103_0");
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
                         plc_command_queue.push("WRITE_D101_0");
-                        std::string cmd = "WRITE_D100_1";
                         plc_command_queue.push(cmd);
-                        
-                        // Lưu lệnh để resume
+                        // Đánh dấu bắt đầu di chuyển để smooth acceleration
                         {
-                            std::lock_guard<std::mutex> lock(last_command_mutex);
-                            last_movement_command = cmd;
+                            std::lock_guard<std::mutex> lock(system_state.state_mutex);
+                            system_state.is_moving = false;  // Reset để trigger ramp-up
                         }
                         total_commands++;
                     } else {
-                        std::cout << "⚠️ Cannot move forward - obstacle at " << front_distance << "cm!" << std::endl;
+                        LOG_WARNING << "Cannot move forward - obstacle at " << front_distance 
+                                    << "cm! Will auto-start when clear." ;
                     }
+                    
                     break;
                 }
                 
@@ -769,12 +847,6 @@ void keyboard_control_thread(ThreadSafeQueue<std::string>& plc_command_queue,
     std::cout << "\nSession ended. Total commands: " << total_commands << std::endl;
 }
 
-// Queue để truyền convex hull giữa các thread
-// Communication queues
-ThreadSafeQueue<std::vector<Point2D>> stable_points_queue;
-ThreadSafeQueue<std::string> lidar_status_queue;
-
-// // ENHANCED PLC THREAD WITH PROPER ERROR HANDLING
 
 // LIDAR THREAD WITH SLAM PROCESSING
 void lidar_thread_func(
@@ -855,8 +927,25 @@ void lidar_thread_func(
         if (min_front < 999.0f) {
             float min_dist_cm = min_front * 100.0f;
             
+            // Tính tốc độ mượt mà
+            int smooth_speed;
+            {
+                std::lock_guard<std::mutex> lock(state.state_mutex);
+                smooth_speed = calculateSmoothSpeed(state, min_dist_cm);
+            }
+            
+            // Gửi tốc độ mượt
+            static int last_sent_speed = -1;
+            if (smooth_speed != last_sent_speed) {  // Chỉ gửi khi thay đổi
+                plc_command_queue.push("WRITE_D103_" + std::to_string(smooth_speed));
+                last_sent_speed = smooth_speed;
+                
+                LOG_INFO << "[Speed Control] Speed: " << smooth_speed 
+                         << "% (Distance: " << min_dist_cm << "cm)";
+            }
+
             // Gửi lệnh PLC ngay lập tức
-            if (min_dist_cm > 50.0f) {
+            if (min_dist_cm > EMERGENCY_STOP_DISTANCE_CM) {
                 {
                     std::lock_guard<std::mutex> lock(state.state_mutex);
                     state.is_safe_to_move = true;
@@ -947,7 +1036,7 @@ void lidar_thread_func(
         state.last_lidar_data = "Lidar connected - Dual mode active";
     }
 
-    LOG_INFO << "[32m[LiDAR Thread] Successfully started with dual-mode processing:"; 
+    LOG_INFO << "[LiDAR Thread] Successfully started with dual-mode processing:"; 
     LOG_INFO << "  - REALTIME mode: Obstacle detection with immediate response";
     LOG_INFO << "  - STABLE mode: Filtered data for server upload";
 

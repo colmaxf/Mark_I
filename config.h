@@ -17,3 +17,10 @@
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
+
+// Khoảng cách an toàn (cm)
+#define SAFE_DISTANCE_CM 200.0f
+// Khoảng cách cảnh báo (cm)
+#define WARNING_DISTANCE_CM 100.0f
+// Khoảng cách dừng khẩn cấp (cm)
+#define EMERGENCY_STOP_DISTANCE_CM 50.0f
