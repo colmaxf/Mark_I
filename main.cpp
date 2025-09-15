@@ -269,15 +269,17 @@ double calculateSpeed(double distance) {
     } else if (distance >= 200.0 && distance < 300.0) {
         // Khoảng 200-300 cm ánh xạ tốc độ 1500-2500
         return 1500.0 + ((distance - 200.0) * (2500.0 - 1500.0)) / (300.0 - 200.0);
-    } else {
+    } else if (distance >= 300.0 && distance < 400.0) {
         // Khoảng 300-400 cm ánh xạ tốc độ 2500-3000
         return 2500.0 + ((distance - 300.0) * (3000.0 - 2500.0)) / (400.0 - 300.0);
+    } else {
+        return 0.0; // An toàn
     }
 }
 
 int calculateSmoothSpeed(SystemState& state, float distance_cm) {
     // Tính tốc độ mục tiêu dựa trên khoảng cách
-    int target = calculateSpeed(distance_cm);
+    int target = static_cast<int>(calculateSpeed(distance_cm));
     
     // Nếu vừa bắt đầu di chuyển
     if (!state.is_moving && target > 0) {
@@ -294,8 +296,11 @@ int calculateSmoothSpeed(SystemState& state, float distance_cm) {
         
         // Tăng tốc dần trong 2 giây đầu
         if (elapsed < 2000) {
-            float ramp_factor = elapsed / 2000.0f;  // 0 -> 1 trong 2 giây
-            state.current_speed = static_cast<int>(target * ramp_factor);
+            // float ramp_factor = elapsed / 2000.0f;  // 0 -> 1 trong 2 giây
+            // state.current_speed = static_cast<int>(target * ramp_factor);
+            float t = elapsed / 2000.0f;
+            float curve = t * t * (3.0f - 2.0f * t);  // smoothstep
+            state.current_speed = static_cast<int>(target * curve);
         } else {
             // Điều chỉnh mượt về tốc độ mục tiêu
             int speed_diff = target - state.current_speed;
@@ -748,13 +753,16 @@ void keyboard_control_thread(ThreadSafeQueue<std::string>& plc_command_queue,
                         plc_command_queue.push("WRITE_D103_0");
                         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-                        plc_command_queue.push("WRITE_D101_0");
-                        plc_command_queue.push(cmd);
                         // Đánh dấu bắt đầu di chuyển để smooth acceleration
                         {
                             std::lock_guard<std::mutex> lock(system_state.state_mutex);
-                            system_state.is_moving = false;  // Reset để trigger ramp-up
+                            system_state.is_moving = false;  // Reset TRƯỚC
+                            system_state.target_speed = 0;    // Reset target
                         }
+                        
+                        plc_command_queue.push("WRITE_D101_0");
+                        plc_command_queue.push(cmd);
+                        
                         total_commands++;
                     } else {
                         LOG_WARNING << "Cannot move forward - obstacle at " << front_distance 
@@ -944,7 +952,7 @@ void lidar_thread_func(
                          << "% (Distance: " << min_dist_cm << "cm)";
             }
 
-            // Gửi lệnh PLC ngay lập tức
+            // Kiểm tra khoảng cách an toàn
             if (min_dist_cm > EMERGENCY_STOP_DISTANCE_CM) {
                 {
                     std::lock_guard<std::mutex> lock(state.state_mutex);
