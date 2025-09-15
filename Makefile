@@ -37,6 +37,10 @@ clean:
 # Run the program
 run: $(TARGET)
 	./$(TARGET)
-
+	
+main.o: config.h
+logger/Logger.o: config.h
+MCprotocollib/MCprotocol.o: config.h
+Lidarlib/Lidarlib.o: config.h
 
 .PHONY: all clean run 
