@@ -18,6 +18,11 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <functional>
+#include <thread>
+#include <atomic>
+#include <unordered_map>
+#include <chrono>
 
 #include "../config.h"
 #include "../logger/Logger.h"
@@ -175,8 +180,91 @@ public:
     void setMonitoringTimer(uint16_t timer_250ms);
     
     /// @}
-
+/// @name Bit Device Operations (Enhanced)
+    /// @{
     
+    /**
+     * @brief Read individual bits from PLC
+     * @param device Device type ("Y", "X", "M", "S", "T", "C")
+     * @param start_addr Starting bit address (e.g., 100 for M100)
+     * @param bit_count Number of bits to read (max 256 for bit units)
+     * @return Vector of boolean values representing bit states
+     * @throw std::runtime_error if not connected or operation fails
+     * 
+     * @example
+     * @code
+     * // Read M100-M109 (10 bits)
+     * auto bits = plc.readBitUnits("M", 100, 10);
+     * if (bits[0]) std::cout << "M100 is ON" << std::endl;
+     * @endcode
+     */
+    std::vector<bool> readBitUnits(const std::string& device, uint32_t start_addr, uint16_t bit_count);
+    
+    /**
+     * @brief Write individual bits to PLC
+     * @param device Device type ("Y", "M", "S", "T", "C")
+     * @param start_addr Starting bit address
+     * @param values Vector of boolean values to write
+     * @return true if write successful
+     * @throw std::runtime_error if not connected or operation fails
+     * 
+     * @example
+     * @code
+     * // Set M50=ON, M51=OFF, M52=ON
+     * std::vector<bool> bits = {true, false, true};
+     * plc.writeBitUnits("M", 50, bits);
+     * @endcode
+     */
+    bool writeBitUnits(const std::string& device, uint32_t start_addr, const std::vector<bool>& values);
+    
+    /// @}
+    
+    /// @name Register Monitoring with Callback
+    /// @{
+    
+    using RegisterCallback = std::function<void(const std::string& device, uint32_t addr, uint16_t old_value, uint16_t new_value)>;
+    using BitCallback = std::function<void(const std::string& device, uint32_t addr, bool old_value, bool new_value)>;
+    
+    /**
+     * @brief Start monitoring a word register for changes
+     * @param device Device type ("D", "R", "Z", "T", "C")
+     * @param addr Register address to monitor
+     * @param callback Function to call when value changes
+     * @param poll_interval_ms Polling interval in milliseconds (default: 100ms)
+     * @return Monitor ID for stopping monitoring later
+     * 
+     * @example
+     * @code
+     * auto id = plc.monitorRegister("D", 100, 
+     *     [](const std::string& dev, uint32_t addr, uint16_t old_val, uint16_t new_val) {
+     *         std::cout << dev << addr << " changed from " << old_val << " to " << new_val << std::endl;
+     *     }, 100);
+     * @endcode
+     */
+    int monitorRegister(const std::string& device, uint32_t addr, RegisterCallback callback, int poll_interval_ms = 100);
+    
+    /**
+     * @brief Start monitoring a bit for changes
+     * @param device Device type ("Y", "X", "M", "S", "T", "C")
+     * @param addr Bit address to monitor
+     * @param callback Function to call when bit state changes
+     * @param poll_interval_ms Polling interval in milliseconds (default: 100ms)
+     * @return Monitor ID for stopping monitoring later
+     */
+    int monitorBit(const std::string& device, uint32_t addr, BitCallback callback, int poll_interval_ms = 100);
+    
+    /**
+     * @brief Stop monitoring a register or bit
+     * @param monitor_id ID returned by monitorRegister or monitorBit
+     */
+    void stopMonitor(int monitor_id);
+    
+    /**
+     * @brief Stop all active monitors
+     */
+    void stopAllMonitors();
+    
+    /// @}
 private:
     SOCKET m_socket_fd;               ///< Socket file descriptor
     std::string m_plc_ip;             ///< PLC IP address
@@ -193,6 +281,12 @@ private:
     uint16_t getDeviceCode(const std::string& device);
     std::string vectorToHexString(const std::vector<uint8_t>& data);
     std::string vectorToHexString(const std::vector<uint16_t>& data);
+
+    // Monitoring related members
+    std::atomic<int> m_next_monitor_id{1};
+    std::unordered_map<int, std::unique_ptr<std::thread>> m_monitor_threads;
+    std::unordered_map<int, std::atomic<bool>> m_monitor_flags;
+    std::mutex m_monitor_mutex;
 
 };
 
