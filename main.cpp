@@ -95,7 +95,7 @@ struct SystemState {
     bool lidar_connected = false;
     std::vector<Point2D> latest_convex_hull;
     int total_stable_hulls = 0;
-    int total_scan_count = 0;
+    //int total_scan_count = 0;
 
     // Safety data
     bool is_safe_to_move = false;           // Cờ an toàn từ LiDAR realtime
@@ -107,16 +107,12 @@ struct SystemState {
     std::chrono::steady_clock::time_point movement_start_time;
     int current_speed = 0;
     int target_speed = 0;
-    // SLAM mapping data
-    std::vector<std::vector<Point2D>> global_map_hulls;
-    long last_hull_timestamp = 0;
-
 };
 
 // Queue để truyền convex hull giữa các thread
 // Communication queues
 ThreadSafeQueue<std::vector<Point2D>> stable_points_queue;
-ThreadSafeQueue<std::string> lidar_status_queue;
+//ThreadSafeQueue<std::string> lidar_status_queue;
 
 //-----------------------------------------------------------------------------//
 
@@ -239,19 +235,18 @@ std::string parseAndExecutePlcCommand(const std::string& command, MCProtocol& pl
  */
 void initializeSystem(ThreadSafeQueue<std::string>& plc_command_queue,
                      ThreadSafeQueue<std::string>& plc_result_queue) {
-    if (!system_initialized.exchange(true)) {  // Đảm bảo chỉ chạy 1 lần
-        LOG_INFO << "[System Init] Sending ONE-TIME initialization command D110_1";
-        plc_command_queue.push("WRITE_D110_1");
-        
-        // Đợi phản hồi
-        std::string result;
-        if (plc_result_queue.pop(result, 2000)) {
-            LOG_INFO << "[System Init] D110_1 response: " << result;
-        } else {
-            LOG_ERROR << "[System Init] No response for D110_1";
-        }
-    } else {
+    if (system_initialized.exchange(true)) {
         LOG_INFO << "[System Init] Already initialized, skipping D110_1";
+        return;
+    }
+
+    LOG_INFO << "[System Init] Sending D110_1";
+    plc_command_queue.push("WRITE_D110_1");
+    std::string result;
+    if (plc_result_queue.pop(result, 2000)) {
+        LOG_INFO << "[System Init] D110_1 response: " << result;
+    } else {
+        LOG_ERROR << "[System Init] No response for D110_1";
     }
 }
 
@@ -273,7 +268,7 @@ double calculateSpeed(double distance) {
         // Khoảng 300-400 cm ánh xạ tốc độ 2500-3000
         return 2500.0 + ((distance - 300.0) * (3000.0 - 2500.0)) / (400.0 - 300.0);
     } else {
-        return 0.0; // An toàn
+        return 200.0; // An toàn
     }
 }
 
@@ -291,8 +286,7 @@ int calculateSmoothSpeed(SystemState& state, float distance_cm) {
     // Nếu đang di chuyển
     if (state.is_moving) {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - state.movement_start_time
-        ).count();
+            std::chrono::steady_clock::now() - state.movement_start_time).count();
         
         // Tăng tốc dần trong 2 giây đầu
         if (elapsed < 2000) {
@@ -457,125 +451,6 @@ void safety_monitor_thread(ThreadSafeQueue<std::string>& plc_command_queue,
     LOG_INFO << "[Safety Monitor] Stopped";
 }
 
-
-
-/**
- * @brief Worker thread thực hiện việc ghi liên tục
- * @param command_id ID lệnh (1: Tiến, 2: Lùi, 3: Trái, 4: Phải)
- * @param plc_command_queue Queue để gửi lệnh PLC
- * @param system_state Tham chiếu đến system state
- * @param should_stop Atomic flag để dừng thread
- */
-// void continuousWriteWorker(int command_id,
-//                           ThreadSafeQueue<std::string>& plc_command_queue,
-//                           ThreadSafeQueue<std::string>& plc_result_queue,
-//                           SystemState& system_state,
-//                           std::atomic<bool>& should_stop) {
-    
-//     // Đăng ký context cho worker thread
-//     std::string worker_name = "WRK" + std::to_string(command_id);
-//     LOG_REGISTER_CONTEXT(worker_name.c_str(), "Worker Thread");
-//     LOG_SET_CONTEXT(worker_name.c_str());
-    
-//     LOG_INFO << "[Worker-" << command_id << "] Started.";
-    
-//     int write_count = 0;
-//     auto start_time = std::chrono::steady_clock::now();
-    
-//     // Kiểm tra D102 một lần khi bắt đầu
-//     if (!checkAndHandleD102(plc_command_queue, plc_result_queue)) {
-//         LOG_ERROR << "[Worker-" << command_id << "] D102 check failed, stopping";
-//         return;
-//     }
-        
-//     while (!should_stop && global_running) {
-//         // Kiểm tra an toàn cho lệnh di chuyển tiến/lùi
-//         bool is_safe = false;
-//         float front_distance = -1.0f;
-//         {
-//             std::lock_guard<std::mutex> lock(system_state.state_mutex);
-//             is_safe = system_state.is_safe_to_move;
-//             front_distance = system_state.current_front_distance;
-//         }
-        
-//         // Kiểm tra an toàn cho lệnh di chuyển tiến/lùi
-//         if (command_id == 1) {
-//             // Xử lý logic an toàn chính xác
-//             if (!is_safe) {
-//                 // NGUY HIỂM: Gửi lệnh dừng ngay lập tức
-//                 plc_command_queue.push("WRITE_D100_0");
-//                 LOG_WARNING << "[Worker-" << command_id << "] Path UNSAFE! Distance: " 
-//                            << front_distance << "cm. Sending emergency STOP.";
-                
-//                 // ✅ FIXED: Thêm delay dài hơn để đảm bảo robot dừng
-//                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
-//                 continue; // Bỏ qua việc gửi lệnh di chuyển
-//             }
-            
-//             // ✅ FIXED: Xử lý giảm tốc độ khi gần vật cản
-//             if (front_distance > EMERGENCY_STOP_DISTANCE_CM && front_distance <= WARNING_DISTANCE_CM) {
-//                 std::string command = "WRITE_D103_"+ ; // Giảm tốc độ
-//                 plc_command_queue.push("WRITE_D103_0"); // Giảm tốc độ
-//                 LOG_WARNING << "[Worker-" << command_id << "] WARNING: Object at " 
-//                            << front_distance << "cm! Slowing down.";
-//             } else if (front_distance > WARNING_DISTANCE_CM) {
-//                 plc_command_queue.push("WRITE_D103_0"); // Tốc độ bình thường
-//             }
-
-//        }
-    
-        
-         
-
-//         // Gửi lệnh tương ứng với ID của worker
-//         std::string command;
-//         switch(command_id) {
-//             case 1: 
-//                 if (is_safe) {
-//                     command = "WRITE_D100_1"; // Tiến
-//                 } else {
-//                     command = "WRITE_D100_0"; // Dừng
-//                 }
-//                 break;
-//             case 2: 
-//                 //if (is_safe) {
-//                     command = "WRITE_D100_2"; // Lùi  
-//                 //} else {
-//                  //   command = "WRITE_D100_0"; // Dừng
-//                 //}
-//                 break;
-//             case 3: command = "WRITE_D101_1"; break;  // Xoay Trái
-//             case 4: command = "WRITE_D101_2"; break;  // Xoay Phải
-//             default:
-//                 LOG_ERROR << "[Worker-" << command_id << "] Invalid command ID!";
-//                 return;
-//         }
-        
-//         plc_command_queue.push(command);
-//         write_count++;
-        
-//         // Đợi phản hồi từ PLC
-//         std::string response;
-//         if (plc_result_queue.pop(response, 100)) {
-//             if (write_count % 10 == 0) {
-//                 LOG_DEBUG << "[Worker-" << command_id << "] Response: " << response;
-//             }
-//         }
-        
-//         // Tần suất gửi lệnh: 10Hz
-//         std::this_thread::sleep_for(std::chrono::milliseconds(200));
-//     }
-    
-//     // Gửi lệnh dừng khi kết thúc
-//     if (command_id <= 2) {
-//         plc_command_queue.push("WRITE_D100_0");
-//     } else {
-//         plc_command_queue.push("WRITE_D101_0");
-//     }
-    
-//     LOG_INFO << "[Worker-" << command_id << "] Stopped. Total commands: " << write_count;
-// }
-
 /**
  * @brief PLC Thread Function (UPDATED)
  */
@@ -593,36 +468,22 @@ void plc_thread_func(SystemState& state,
     
     // Try to establish connection to PLC
     bool connection_established = false;
-    int connection_attempts = 0;
-    const int max_attempts = 3;
     
-    while (connection_attempts < max_attempts && !connection_established && global_running) {
-        connection_attempts++;
-        LOG_INFO << "[PLC Thread] Connection attempt " << connection_attempts << "/" << max_attempts;
-        
+    for (int attempt = 1; attempt <= 3 && !connection_established && global_running; ++attempt) {
+        LOG_INFO << "[PLC Thread] Connection attempt " << attempt << "/3";
         if (plc->connect()) {
             connection_established = true;
-            
-            // Lưu PLC pointer global
-            {
-                std::lock_guard<std::mutex> lock(plc_ptr_mutex);
-                global_plc_ptr = plc;
-            }
-            
+            std::lock_guard<std::mutex> lock(plc_ptr_mutex);
+            global_plc_ptr = plc;
             {
                 std::lock_guard<std::mutex> lock(state.state_mutex);
                 state.plc_connected = true;
-                state.last_plc_status = "PLC connected successfully";
+                state.last_plc_status = "PLC connected";
             }
-            
-            LOG_INFO << "[PLC Thread] Connected to PLC successfully";
-            
+            LOG_INFO << "[PLC Thread] Connected to PLC";
         } else {
-            LOG_ERROR << "[PLC Thread] Failed to connect to PLC, attempt " << connection_attempts;
-            
-            if (connection_attempts < max_attempts) {
-                std::this_thread::sleep_for(std::chrono::seconds(2));
-            }
+            LOG_ERROR << "[PLC Thread] Failed to connect, attempt " << attempt;
+            std::this_thread::sleep_for(std::chrono::seconds(2));
         }
     }
     
@@ -709,12 +570,7 @@ void keyboard_control_thread(ThreadSafeQueue<std::string>& plc_command_queue,
     LOG_INFO << "  D/→ : Turn Right";
     LOG_INFO << "  0   : Emergency STOP";
     LOG_INFO << "  ESC : Exit program";
-    
-    std::cout << "\n=== KEYBOARD CONTROL ACTIVE ===" << std::endl;
-    std::cout << "W/↑: Forward | S/↓: Backward | A/←: Left | D/→: Right" << std::endl;
-    std::cout << "0: STOP | ESC: Exit" << std::endl;
-    std::cout << "================================\n" << std::endl;
-    
+        
     SimpleKeyboardListener listener;
     
     // Statistics tracking
@@ -774,8 +630,8 @@ void keyboard_control_thread(ThreadSafeQueue<std::string>& plc_command_queue,
                 
                 case 'S': { // Lệnh lùi không kiểm tra an toàn và không lưu lại
                     if (!checkAndHandleD102(plc_command_queue, plc_result_queue)) break;
-                    
-                    std::cout << "→ Moving BACKWARD" << std::endl;
+
+                    LOG_INFO << "→ Moving BACKWARD";
                     std::string cmd = "WRITE_D100_2";
                     plc_command_queue.push(cmd);
                     
@@ -792,40 +648,38 @@ void keyboard_control_thread(ThreadSafeQueue<std::string>& plc_command_queue,
                 case 'D': {
                     if (!checkAndHandleD102(plc_command_queue, plc_result_queue)) break;
 
-                    if (is_safe) {
-                        if (key == 'A') std::cout << "→ Turning LEFT" << std::endl;
-                        else std::cout << "→ Turning RIGHT" << std::endl;
-
-                        std::string forward_cmd = "WRITE_D100_1";
-                        std::string turn_cmd = (key == 'A') ? "WRITE_D101_1" : "WRITE_D101_2";
-                        
-                        plc_command_queue.push(forward_cmd);
-                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                        plc_command_queue.push(turn_cmd);
-                        
-                        // Chỉ lưu lệnh tiến, không lưu lệnh xoay
-                        {
-                            std::lock_guard<std::mutex> lock(last_command_mutex);
-                            last_movement_command = forward_cmd;
-                        }
-                        total_commands++;
-                    } else {
-                        std::cout << "⚠️ Cannot turn - obstacle detected at " << front_distance << "cm!" << std::endl;
+                    if (!is_safe) {
+                        LOG_WARNING << "Cannot turn - obstacle at " << front_distance << "cm";
+                        break;
                     }
+
+                    LOG_INFO << "→ Turning " << (key == 'A' ? "LEFT" : "RIGHT") ;
+                    
+                    plc_command_queue.push("WRITE_D100_1"); // Đặt lệnh tiến để xoay
+                    plc_command_queue.push((key == 'A') ? "WRITE_D101_1" : "WRITE_D101_2"); // Xoay trái/phải
+                    
+                    // Chỉ lưu lệnh tiến, không lưu lệnh xoay
+                    // {
+                    //     std::lock_guard<std::mutex> lock(last_command_mutex);
+                    //     last_movement_command = forward_cmd;
+                    // }
+                    total_commands++;
+                   
                     break;
                 }
                 
                 case '0': {
                     LOG_INFO << "[Keyboard] EMERGENCY STOP (0) pressed";
-                    std::cout << "🛑 EMERGENCY STOP!" << std::endl;
                     
                     plc_command_queue.push("WRITE_D100_0");
                     plc_command_queue.push("WRITE_D101_0");
-                    
-                    // Xóa lệnh đã lưu khi dừng khẩn cấp
+                    // Xóa lệnh đã lưu
+                    std::lock_guard<std::mutex> lock(last_command_mutex);
+                    last_movement_command.clear();
                     {
-                        std::lock_guard<std::mutex> lock(last_command_mutex);
-                        last_movement_command = "";
+                        std::lock_guard<std::mutex> lock(system_state.state_mutex);
+                        system_state.is_moving = false;
+                        system_state.current_speed = 0;
                     }
                     break;
                 }
@@ -842,9 +696,10 @@ void keyboard_control_thread(ThreadSafeQueue<std::string>& plc_command_queue,
     // Cleanup khi thoát
     plc_command_queue.push("WRITE_D100_0");
     plc_command_queue.push("WRITE_D101_0");
+
     {
         std::lock_guard<std::mutex> lock(last_command_mutex);
-        last_movement_command = "";
+        last_movement_command.clear();
     }
     
     auto session_duration = std::chrono::duration_cast<std::chrono::seconds>(
@@ -852,7 +707,6 @@ void keyboard_control_thread(ThreadSafeQueue<std::string>& plc_command_queue,
     
     LOG_INFO << "[Keyboard] Session ended. Total commands: " << total_commands 
             << " in " << session_duration.count() << " seconds";
-    std::cout << "\nSession ended. Total commands: " << total_commands << std::endl;
 }
 
 
@@ -866,35 +720,15 @@ void lidar_thread_func(
     LOG_INFO << "[LiDAR Thread] Starting...";
 
     // Khởi tạo LidarProcessor với các IP/Port mặc định
-    std::string lidar_host_ip = LIDAR_HOST_IP;
-    std::string lidar_port = std::to_string(LIDAR_PORT);
-    std::string lidar_client_ip = LIDAR_CLIENT_IP; 
-    std::string lidar_client_port = std::to_string(LIDAR_CLIENT_PORT);
+    auto lidar_processor = std::make_unique<LidarProcessor>(LIDAR_HOST_IP, std::to_string(LIDAR_PORT),
+                                                          LIDAR_CLIENT_IP, std::to_string(LIDAR_CLIENT_PORT));
 
-    auto lidar_processor = std::unique_ptr<LidarProcessor>(new LidarProcessor(lidar_host_ip, lidar_port, lidar_client_ip, lidar_client_port));
-
-    // Bước 1: Khởi tạo kết nối với LiDAR
-    if (!lidar_processor->initialize()) {
-
-        LOG_ERROR << "[LiDAR Thread] Failed to initialize LidarProcessor.";
-
+    if (!lidar_processor->initialize() || !lidar_processor->start()) {
+        LOG_ERROR << "[LiDAR Thread] Failed to initialize/start LidarProcessor";
         {
             std::lock_guard<std::mutex> lock(state.state_mutex);
             state.lidar_connected = false;
             state.last_lidar_data = "Lidar initialization failed";
-        }
-        return; // Kết thúc luồng nếu không thể khởi tạo
-    }
-
-    // Bước 2: Bắt đầu luồng xử lý dữ liệu ngầm của thư viện LiDAR
-    if (!lidar_processor->start()) {
-
-        LOG_ERROR << "[LiDAR Thread] Failed to start LidarProcessor.";
-
-        {
-            std::lock_guard<std::mutex> lock(state.state_mutex);
-            state.lidar_connected = false;
-            state.last_lidar_data = "Lidar start failed";
         }
         return;
     }
@@ -931,59 +765,46 @@ void lidar_thread_func(
             }
         }
         
+        if (min_front >= 999.0f || min_front <= 0.0f) return;
         // Xử lý phản hồi NHANH cho vật cản phía trước
-        if (min_front < 999.0f) {
-            float min_dist_cm = min_front * 100.0f;
+        // 1. Chuyển đổi khoảng cách từ mét sang centimet.
+        float min_dist_cm = min_front * 100.0f;
+        int smooth_speed = 0;
+
+        // 2. Cập nhật trạng thái hệ thống một cách an toàn (thread-safe).
+        // std::lock_guard đảm bảo rằng mutex sẽ được giải phóng ngay cả khi có lỗi xảy ra.
+        {
+            std::lock_guard<std::mutex> lock(state.state_mutex);
+            // Cập nhật khoảng cách phía trước hiện tại.
+            state.current_front_distance = min_dist_cm;
+            // Quyết định xem AGV có an toàn để di chuyển không bằng cách so sánh với ngưỡng dừng khẩn cấp.
+            state.is_safe_to_move = min_dist_cm > EMERGENCY_STOP_DISTANCE_CM;
+            // Ghi lại thời điểm cập nhật an toàn cuối cùng.
+            state.last_safety_update = std::chrono::steady_clock::now().time_since_epoch().count();
+            // Tạo chuỗi log để hiển thị trạng thái LiDAR.
+            state.last_lidar_data = "[RT] Front: " + std::to_string(min_dist_cm) + "cm | L: " +
+                                   std::to_string(static_cast<int>(min_left * 100)) + "cm | R: " +
+                                   std::to_string(static_cast<int>(min_right * 100)) + "cm";
             
-            // Tính tốc độ mượt mà
-            int smooth_speed;
-            {
-                std::lock_guard<std::mutex> lock(state.state_mutex);
+            // Chỉ tính toán tốc độ mới khi AGV an toàn và đang đứng yên (chuẩn bị di chuyển).
+            if (state.is_safe_to_move && !state.is_moving) {
                 smooth_speed = calculateSmoothSpeed(state, min_dist_cm);
             }
-            
-            // Gửi tốc độ mượt
-            static int last_sent_speed = -1;
-            if (smooth_speed != last_sent_speed) {  // Chỉ gửi khi thay đổi
-                plc_command_queue.push("WRITE_D103_" + std::to_string(smooth_speed));
-                last_sent_speed = smooth_speed;
-                
-                LOG_INFO << "[Speed Control] Speed: " << smooth_speed 
-                         << "% (Distance: " << min_dist_cm << "cm)";
-            }
-
-            // Kiểm tra khoảng cách an toàn
-            if (min_dist_cm > EMERGENCY_STOP_DISTANCE_CM) {
-                {
-                    std::lock_guard<std::mutex> lock(state.state_mutex);
-                    state.is_safe_to_move = true;
-                    state.current_front_distance = min_dist_cm;
-                    state.last_safety_update = std::chrono::steady_clock::now().time_since_epoch().count();
-                }
-                //plc_command_queue.push("WRITE_D100_1");
-                // Debug output với màu xanh cho an toàn
-                LOG_INFO << "[REALTIME] Path clear: " << min_dist_cm << "cm";
-
-            } else {
-                //plc_command_queue.push("WRITE_D100_0");
-                // Debug output với màu đỏ cho cảnh báo
-                LOG_WARNING << "[REALTIME WARNING] Obstacle detected: " << min_dist_cm << "cm";
-                {
-                    std::lock_guard<std::mutex> lock(state.state_mutex);
-                    state.is_safe_to_move = false;
-                    state.current_front_distance = min_dist_cm;
-                    state.last_safety_update = std::chrono::steady_clock::now().time_since_epoch().count();
-                }
-            }
-            
-            // Cập nhật state với thông tin realtime
-            {
-                std::lock_guard<std::mutex> lock(state.state_mutex);
-                state.last_lidar_data = "[RT] Front: " + std::to_string(min_dist_cm) + "cm | " +
-                                       "L: " + std::to_string((int)(min_left*100)) + "cm | " +
-                                       "R: " + std::to_string((int)(min_right*100)) + "cm";
-            }
         }
+        
+        // 3. Gửi lệnh tốc độ đến PLC nếu có sự thay đổi.
+        // Biến static để lưu giá trị tốc độ đã gửi lần cuối, tránh gửi lệnh lặp lại không cần thiết.
+        static int last_sent_speed = -1;
+        // Chỉ gửi lệnh khi tốc độ mới khác với tốc độ cũ.
+        if (smooth_speed != last_sent_speed) {
+            // Tạo lệnh ghi vào thanh ghi D103 của PLC và đẩy vào hàng đợi.
+            plc_command_queue.push("WRITE_D103_" + std::to_string(smooth_speed));
+            // Cập nhật tốc độ đã gửi.
+            last_sent_speed = smooth_speed;
+            LOG_INFO << "[Speed Control] Speed: " << smooth_speed << " (Distance: " << min_dist_cm << "cm)";
+        }
+        
+        LOG_INFO << (min_dist_cm > EMERGENCY_STOP_DISTANCE_CM ? "[REALTIME] Path clear: " : "[REALTIME] Obstacle: ") << min_dist_cm << "cm";
     });
 // 2. STABLE CALLBACK - Dữ liệu ổn định cho server
     lidar_processor->setStablePointsCallback([&state, &points_queue](const std::vector<LidarPoint>& stable_points) {
@@ -1026,16 +847,6 @@ void lidar_thread_func(
         2       // min_neighbors
     );
 
-    // Bắt đầu xử lý
-    if (!lidar_processor->start()) {
-        LOG_ERROR << "[LiDAR Thread] Failed to start LidarProcessor.";
-        {
-            std::lock_guard<std::mutex> lock(state.state_mutex);
-            state.lidar_connected = false;
-            state.last_lidar_data = "Lidar start failed";
-        }
-        return;
-    }
 
     // Cập nhật trạng thái thành công
     {
@@ -1116,28 +927,17 @@ void lidar_thread_func(
 
 // HÀM MAIN
 int main() {
-    std::cout << "[Main Thread] Control system starting..." << std::endl;
-
-    // Initialize logger
-// Lấy instance duy nhất của Logger (singleton)
-    // Logger& logger = Logger::get_instance();
-    
-
-    
-
-    
+    // Initialize logging system
     // Register MAIN app and context
     LOG_REGISTER_APP("MAIN", "Main AGV Application");
     LOG_REGISTER_CONTEXT("MAIN", "Main Control Context");
     LOG_SET_APP("MAIN");
     LOG_SET_CONTEXT("MAIN");
-    LOG_INFO << "[Main Thread] System initialized";
+    LOG_INFO << "[Main Thread] Control system starting...";
+
 
 
     SystemState shared_state;
-
-// Trong plc_thread_func, sau khi kết nối thành công:
-   // plc_ptr = &plc; // Lưu con trỏ để keyboard thread sử dụng
 
     ThreadSafeQueue<std::string> plc_command_queue;
     ThreadSafeQueue<std::string> plc_result_queue;
@@ -1233,32 +1033,19 @@ int main() {
     //     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     // }
 
-    std::cout << "\n[Main Thread] Initiating shutdown..." << std::endl;
+    LOG_INFO << "[Main Thread] Initiating shutdown...";
     
     // Stop all threads gracefully
     global_running = false;
     
     // Join all threads
-    if (plc_thread.joinable()) {
-        plc_thread.join();
-        std::cout << "[Main Thread] PLC thread stopped." << std::endl;
+     for (auto& thread : {&plc_thread, &lidar_thread, &keyboard_thread, &safety_thread}) {
+        if (thread->joinable()) {
+            thread->join();
+            LOG_INFO << "[Main Thread] Thread joined";
+        }
     }
 
-    if (lidar_thread.joinable()) {
-        lidar_thread.join();
-        std::cout << "[Main Thread] LiDAR thread stopped." << std::endl;
-    }
-
-       if (keyboard_thread.joinable()) {
-        keyboard_thread.join();
-        std::cout << "[Main Thread] Keyboard thread stopped." << std::endl;
-    }
-
-    if (safety_thread.joinable()) {
-        safety_thread.join();
-        std::cout << "[Main Thread] Safety monitor stopped." << std::endl;
-    }
-
-    std::cout << "[Main Thread] System shutdown complete." << std::endl;
+    LOG_INFO << "[Main Thread] System shutdown complete.";
     return 0;
 }

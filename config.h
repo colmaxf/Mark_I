@@ -24,3 +24,8 @@
 #define WARNING_DISTANCE_CM 100.0f
 // Khoảng cách dừng khẩn cấp (cm)
 #define EMERGENCY_STOP_DISTANCE_CM 50.0f
+
+    // Speed control
+#define SPEED_STEP 100
+#define ACCEL_TIME_MS 2000
+#define MIN_START_SPEED 200
