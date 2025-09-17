@@ -26,6 +26,7 @@
 
 #include "../config.h"
 #include "../logger/Logger.h"
+#include <mutex>
 
 /// Linux socket compatibility defines
 #define SOCKET int
@@ -287,6 +288,8 @@ private:
     std::unordered_map<int, std::unique_ptr<std::thread>> m_monitor_threads;
     std::unordered_map<int, std::atomic<bool>> m_monitor_flags;
     std::mutex m_monitor_mutex;
+
+    std::mutex m_socket_mutex; // Mutex for socket operations
 
 };
 

@@ -260,7 +260,7 @@ double calculateSpeed(double distance) {
     // Hàm ánh xạ tuyến tính: y = y1 + ((x - x1) * (y2 - y1)) / (x2 - x1)
     if (distance >= 50.0 && distance < 100.0) {
         // Khoảng 50-100 cm ánh xạ tốc độ 0-500
-        return 0.0 + ((distance - 50.0) * (500.0 - 0.0)) / (100.0 - 50.0);
+        return 100.0 + ((distance - 50.0) * (500.0 - 100.0)) / (100.0 - 50.0);
     } else if (distance >= 100.0 && distance < 200.0) {
         // Khoảng 100-200 cm ánh xạ tốc độ 500-1500
         return 500.0 + ((distance - 100.0) * (1500.0 - 500.0)) / (200.0 - 100.0);
@@ -825,9 +825,12 @@ void lidar_thread_func(
         
         // Gửi lệnh tốc độ
         static int last_sent_speed = -1;
-        if (smooth_speed != last_sent_speed) {
+        static auto last_send_time = std::chrono::steady_clock::now();
+        auto now = std::chrono::steady_clock::now();
+        if (smooth_speed != last_sent_speed && (now - last_send_time) >= std::chrono::milliseconds(100)) {
             plc_command_queue.push("WRITE_D103_" + std::to_string(smooth_speed));
             last_sent_speed = smooth_speed;
+            last_send_time = now;
             LOG_INFO << "[Speed Control] Sent D103=" << smooth_speed << " (Distance: " << min_dist_cm << "cm, Movement: " << (movement_active ? "ACTIVE" : "IDLE") << ")";
         }
         

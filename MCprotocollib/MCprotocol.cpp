@@ -105,6 +105,9 @@ void MCProtocol::disconnect() {
 }
 
 std::vector<uint16_t> MCProtocol::readWords(const std::string& device, uint32_t start_addr, uint16_t count) {
+    
+    std::lock_guard<std::mutex> lock(m_socket_mutex);
+    
     // Check connection status
     if (!m_is_connected) {
         LOG_ERROR << "[MCProtocol] Read operation failed: Not connected to PLC";
@@ -204,6 +207,9 @@ std::vector<uint16_t> MCProtocol::readWords(const std::string& device, uint32_t 
 }
 
 bool MCProtocol::writeWords(const std::string& device, uint32_t start_addr, const std::vector<uint16_t>& values) {
+    
+    std::lock_guard<std::mutex> lock(m_socket_mutex);
+    
     // Check connection status
     if (!m_is_connected) {
         LOG_ERROR << "[MCProtocol] Write operation failed: Not connected to PLC";
@@ -276,6 +282,9 @@ bool MCProtocol::writeWords(const std::string& device, uint32_t start_addr, cons
 }
 
 std::vector<uint16_t> MCProtocol::readBits(const std::string& device, uint32_t start_addr, uint16_t word_count) {
+    
+    std::lock_guard<std::mutex> lock(m_socket_mutex);
+    
     // Check connection status
     if (!m_is_connected) {
         LOG_ERROR << "[MCProtocol] Not connected to PLC";
@@ -413,6 +422,9 @@ uint16_t MCProtocol::getDeviceCode(const std::string& device) {
  * @endcode
  */
 std::vector<bool> MCProtocol::readBitUnits(const std::string& device, uint32_t start_addr, uint16_t bit_count) {
+    
+    std::lock_guard<std::mutex> lock(m_socket_mutex);
+    
     if (!m_is_connected) {
         LOG_ERROR << "[MCProtocol] Read bits failed: Not connected to PLC";
         throw std::runtime_error("[MCProtocol] Not connected to PLC");
@@ -514,6 +526,9 @@ std::vector<bool> MCProtocol::readBitUnits(const std::string& device, uint32_t s
  * @endcode
  */
 bool MCProtocol::writeBitUnits(const std::string& device, uint32_t start_addr, const std::vector<bool>& values) {
+    
+    std::lock_guard<std::mutex> lock(m_socket_mutex);
+    
     if (!m_is_connected) {
         LOG_ERROR << "[MCProtocol] Write bits failed: Not connected to PLC";
         throw std::runtime_error("[MCProtocol] Not connected to PLC");
