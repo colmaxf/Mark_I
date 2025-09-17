@@ -23,6 +23,7 @@
 
 #include "MCprotocollib/MCprotocol.h"
 #include "Lidarlib/Lidarlib.h"
+#include "Serverlib/servercommunicator.h"
 
 // THREAD-SAFE QUEUE
 template <typename T>
@@ -943,14 +944,199 @@ void lidar_thread_func(
 // }
 
 // Luồng Webserver
-// void webserver_thread_func(SystemState& state) {
-//     std::cout << "[Webserver Thread] Khởi động." << std::endl;
-//     // --- Placeholder: Sử dụng thư viện như Crow hoặc Pistache ---
-//     // Giả lập web server chạy
-//     while(true) {
-//         std::this_thread::sleep_for(std::chrono::seconds(10));
-//     }
-// }
+/**
+ * @brief Thread giao tiếp với server
+ */
+void server_communication_thread(SystemState& state,
+                                ThreadSafeQueue<std::vector<Point2D>>& lidar_points_queue) {
+    
+    LOG_INFO << "[Server Comm] Starting communication thread...";
+    
+    // Tạo CommunicationServer instance
+    auto comm_server = std::make_unique<ServerComm::CommunicationServer>(
+        SERVER_IP, SERVER_PORT, COMM_SEND_INTERVAL_MS);
+    
+    // Đăng ký callback để lấy status từ hệ thống
+    comm_server->setStatusCallback([&state]() -> ServerComm::AGVStatusPacket {
+        ServerComm::AGVStatusPacket packet;
+        
+        // Lock state để đọc dữ liệu an toàn
+        {
+            std::lock_guard<std::mutex> lock(state.state_mutex);
+            
+            // Vị trí hiện tại (giả định có thêm trong SystemState)
+            packet.current_x = 0.0f;  // TODO: Lấy từ odometry/SLAM
+            packet.current_y = 0.0f;
+            packet.current_angle = 0.0f;
+            
+            // Trạng thái PLC - Đọc các thanh ghi quan trọng
+            packet.plc_registers["D100"] = 0;  // Direction
+            packet.plc_registers["D101"] = 0;  // Turn
+            packet.plc_registers["D102"] = 0;  // Status
+            packet.plc_registers["D103"] = state.current_speed;  // Speed
+            packet.plc_registers["D110"] = 0;  // System state
+            
+            // Copy LiDAR points
+            packet.lidar_points.reserve(state.latest_convex_hull.size());
+            for (const auto& p : state.latest_convex_hull) {
+                packet.lidar_points.push_back(p);
+            }
+            
+            // System status
+            packet.is_moving = state.is_moving;
+            packet.is_safe = state.is_safe_to_move;
+            packet.battery_level = state.battery_level;
+            packet.current_speed = state.current_speed;
+            packet.timestamp = state.last_safety_update;
+        }
+        
+        return packet;
+    });
+    
+    // Đăng ký callback xử lý lệnh từ server
+    // comm_server->setCommandCallback([&state, &plc_command_queue](const NavigationCommand& cmd) {
+    //     LOG_INFO << "[Server Comm] Received command type: " << cmd.type;
+        
+    //     switch (cmd.type) {
+    //         case NavigationCommand::MOVE_TO_POINT: {
+    //             LOG_INFO << "[Server Comm] Move to point: (" 
+    //                     << cmd.target_x << ", " << cmd.target_y << ")";
+                
+    //             // TODO: Implement path planning and movement
+    //             // Tính toán góc cần xoay
+    //             float angle_to_target = atan2(cmd.target_y, cmd.target_x);
+                
+    //             // Gửi lệnh PLC để di chuyển
+    //             if (cmd.speed > 0) {
+    //                 plc_command_queue.push("WRITE_D103_" + std::to_string((int)cmd.speed));
+    //                 plc_command_queue.push("WRITE_D100_1");  // Forward
+    //             }
+    //             break;
+    //         }
+            
+    //         case NavigationCommand::ROTATE_TO_ANGLE: {
+    //             LOG_INFO << "[Server Comm] Rotate to angle: " << cmd.target_angle;
+                
+    //             // Xác định hướng xoay
+    //             // TODO: Tính toán dựa trên góc hiện tại
+    //             plc_command_queue.push("WRITE_D100_1");
+    //             plc_command_queue.push("WRITE_D101_1"); // Turn left or right
+    //             break;
+    //         }
+            
+    //         case NavigationCommand::FOLLOW_PATH: {
+    //             LOG_INFO << "[Server Comm] Follow path with " << cmd.path.size() << " points";
+    //             // TODO: Implement path following algorithm
+    //             break;
+    //         }
+            
+    //         case NavigationCommand::STOP: {
+    //             LOG_INFO << "[Server Comm] Stop command";
+    //             plc_command_queue.push("WRITE_D100_0");
+    //             plc_command_queue.push("WRITE_D101_0");
+    //             break;
+    //         }
+            
+    //         case NavigationCommand::EMERGENCY_STOP: {
+    //             LOG_WARNING << "[Server Comm] Emergency stop!";
+    //             plc_command_queue.push("WRITE_D100_0");
+    //             plc_command_queue.push("WRITE_D101_0");
+                
+    //             // Clear movement state
+    //             {
+    //                 std::lock_guard<std::mutex> lock(state.state_mutex);
+    //                 state.movement_command_active = false;
+    //                 state.is_moving = false;
+    //                 state.current_speed = 0;
+    //             }
+    //             break;
+    //         }
+    //     }
+    // });
+    
+    // Đăng ký callback kết nối
+    comm_server->setConnectionCallback([&state](bool connected) {
+        LOG_INFO << "[Server Comm] Connection status: " << (connected ? "Connected" : "Disconnected");
+        
+        // Update system state
+        std::lock_guard<std::mutex> lock(state.state_mutex);
+        // Có thể thêm biến server_connected vào SystemState
+    });
+    
+    // Bắt đầu giao tiếp
+    if (!comm_server->start()) {
+        LOG_ERROR << "[Server Comm] Failed to start communication";
+        return;
+    }
+    
+    LOG_INFO << "[Server Comm] Successfully connected to server";
+    
+    // Main loop - xử lý dữ liệu LiDAR để gửi lên server
+    while (global_running) {
+        // Gửi LiDAR points khi có dữ liệu mới
+        std::vector<Point2D> points;
+        if (lidar_points_queue.pop(points, 100)) {
+            comm_server->sendLidarPoints(points);
+            LOG_DEBUG << "[Server Comm] Sent " << points.size() << " LiDAR points";
+        }
+        
+        // Định kỳ gửi PLC registers (mỗi 500ms)
+        static auto last_plc_send = std::chrono::steady_clock::now();
+        auto now = std::chrono::steady_clock::now();
+        
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_plc_send).count() >= 500) {
+            // Lấy giá trị PLC từ global pointer
+            std::map<std::string, uint16_t> plc_data;
+            
+            {
+                std::lock_guard<std::mutex> lock(plc_ptr_mutex);
+                if (global_plc_ptr && global_plc_ptr->isConnected()) {
+                    try {
+                        // Đọc các thanh ghi quan trọng
+                        plc_data["D100"] = global_plc_ptr->readSingleWord("D", 100);
+                        plc_data["D101"] = global_plc_ptr->readSingleWord("D", 101);
+                        plc_data["D102"] = global_plc_ptr->readSingleWord("D", 102);
+                        plc_data["D103"] = global_plc_ptr->readSingleWord("D", 103);
+                        plc_data["D110"] = global_plc_ptr->readSingleWord("D", 110);
+                        plc_data["D200"] = global_plc_ptr->readSingleWord("D", 200);
+                    } catch (const std::exception& e) {
+                        LOG_ERROR << "[Server Comm] Failed to read PLC: " << e.what();
+                    }
+                }
+            }
+            
+            if (!plc_data.empty()) {
+                comm_server->sendPLCRegisters(plc_data);
+                LOG_DEBUG << "[Server Comm] Sent PLC registers update";
+            }
+            
+            last_plc_send = now;
+        }
+        
+        // Kiểm tra lệnh từ server
+        ServerComm::NavigationCommand cmd;
+        while (comm_server->getNextCommand(cmd)) {
+            LOG_INFO << "[Server Comm] Processing queued command type: " << cmd.type;
+            // Command đã được xử lý trong callback, chỉ log ở đây
+        }
+        
+        // In thống kê định kỳ
+        static auto last_stats = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - last_stats).count() >= 10) {
+            LOG_INFO << "[Server Comm] Stats - Sent: " << comm_server->getTotalPacketsSent()
+                    << " Received: " << comm_server->getTotalPacketsReceived()
+                    << " Data rate: " << comm_server->getDataRate() << " KB/s";
+            last_stats = now;
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    
+    // Cleanup
+    comm_server->stop();
+    LOG_INFO << "[Server Comm] Thread stopped";
+}
+
 
 // HÀM MAIN
 int main() {
@@ -996,7 +1182,10 @@ int main() {
                                    std::ref(plc_command_queue));
 
     //Server thread
-    // std::thread webserver_thread(webserver_thread_func, std::ref(shared_state), std::ref(stable_points_queue));
+    std::thread server_thread(server_communication_thread,
+                            std::ref(shared_state),
+                            std::ref(stable_points_queue));
+    
     //Battery thread
     // std::thread battery_thread(battery_thread_func, std::ref(shared_state)); 
 
@@ -1070,7 +1259,7 @@ int main() {
     global_running = false;
     
     // Join all threads
-     for (auto& thread : {&plc_thread, &lidar_thread, &keyboard_thread, &safety_thread, &plc_periodic_thread}) {
+     for (auto& thread : {&plc_thread, &lidar_thread, &keyboard_thread, &safety_thread, &plc_periodic_thread, &server_thread}) {
         if (thread->joinable()) {
             thread->join();
             LOG_INFO << "[Main Thread] Thread joined";

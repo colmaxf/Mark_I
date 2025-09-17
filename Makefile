@@ -1,6 +1,6 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -pthread 
-INCLUDES = -I. -Ilogger -IMCprotocollib -ILidarlib
+INCLUDES = -I. -Ilogger -IMCprotocollib -ILidarlib -IServerlib
 
 # Thêm các thư viện Boost cần thiết
 LIBS = -lboost_thread -lboost_system -lpthread -ldlt
@@ -10,7 +10,8 @@ SOURCES = main.cpp \
           logger/Logger.cpp \
           MCprotocollib/MCprotocol.cpp \
           Lidarlib/Lidarlib.cpp \
-          Lidarlib/Data_SDK/LakiBeamUDP.cpp
+          Lidarlib/Data_SDK/LakiBeamUDP.cpp \
+          Serverlib/servercommunicator.cpp
 
 # Object files
 OBJECTS = $(SOURCES:.cpp=.o)
@@ -42,5 +43,6 @@ main.o: config.h
 logger/Logger.o: config.h
 MCprotocollib/MCprotocol.o: config.h
 Lidarlib/Lidarlib.o: config.h
+Serverlib/servercommunicator.o: config.h
 
 .PHONY: all clean run 
