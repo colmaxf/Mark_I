@@ -108,7 +108,7 @@ vector<LidarPoint> NoiseFilter::smoothAngularJumps(const vector<LidarPoint>& poi
 bool NoiseFilter::isPointValid(const LidarPoint& point, 
                               const vector<LidarPoint>& neighbors) const {
     // Nếu không có đủ số lượng lân cận, coi như là điểm nhiễu.
-    if (neighbors.size() < min_neighbors) return false;
+    if (neighbors.size() < static_cast<size_t>(min_neighbors)) return false;
     
     float avg_distance = 0;
     for (const auto& neighbor : neighbors) {
@@ -240,8 +240,8 @@ bool RealtimeStabilizer::update(const vector<LidarPoint>& new_points) {
     if (new_points.empty()) return false;
     
     // Thêm frame mới vào lịch sử và quản lý kích thước cửa sổ.
-    point_history.push_back(new_points);
-    if (point_history.size() > history_window) {
+    point_history.push_back(new_points); // cppcheck-suppress[accessMoved]
+    if (point_history.size() > static_cast<size_t>(history_window)) {
         point_history.pop_front();
     }
     
