@@ -66,6 +66,11 @@ struct AGVStatusPacket {
     bool is_safe;
     float battery_level;
     float current_speed;
+    // Connection statuses
+    bool plc_connected;
+    bool lidar_connected;
+    bool battery_connected;
+    bool server_connected;
     long timestamp;
     
     std::string toProtocolString() const;

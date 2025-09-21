@@ -121,7 +121,11 @@ std::string AGVStatusPacket::toProtocolString() const {
        << "\"is_moving\":" << (is_moving ? "true" : "false")
        << ",\"is_safe\":" << (is_safe ? "true" : "false")
        << ",\"battery_level\":" << battery_level
-       << ",\"current_speed\":" << current_speed
+       << ",\"current_speed\":" << current_speed << ","
+       << "\"plc_connected\":" << (plc_connected ? "true" : "false") << ","
+       << "\"lidar_connected\":" << (lidar_connected ? "true" : "false") << ","
+       << "\"battery_connected\":" << (battery_connected ? "true" : "false") << ","
+       << "\"server_connected\":" << (server_connected ? "true" : "false")
        << ",\"timestamp\":" << timestamp
        << "}}";
     return ss.str();

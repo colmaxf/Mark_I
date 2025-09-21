@@ -26,6 +26,11 @@
 #include "Serverlib/servercommunicator.h"
 #include "Batterylib/BatteryJBD.h"
 
+/**
+ * @class ThreadSafeQueue
+ * @brief Một hàng đợi an toàn luồng (thread-safe) để giao tiếp giữa các luồng.
+ * @tparam T Kiểu dữ liệu của các phần tử trong hàng đợi.
+ */
 // THREAD-SAFE QUEUE
 template <typename T>
 class ThreadSafeQueue {
@@ -66,24 +71,38 @@ private:
 };
 
 //------------------------------------- Global variables-------------------------------------//
-// Biến để đảm bảo khởi tạo hệ thống chỉ một lần
+/// @brief Cờ báo hiệu PLC đang ở trạng thái lỗi (ví dụ: D102=5).
 std::atomic<bool> plc_in_error_state{false};
+/// @brief Cờ đảm bảo hệ thống chỉ được khởi tạo một lần.
 std::atomic<bool> system_initialized{false};
+/// @brief Con trỏ chia sẻ toàn cục đến đối tượng PLC, cho phép truy cập từ các luồng khác.
 std::shared_ptr<MCProtocol> global_plc_ptr;  // Shared pointer cho PLC
+/// @brief Mutex để bảo vệ truy cập vào `global_plc_ptr`.
 std::mutex plc_ptr_mutex;  // Mutex để bảo vệ truy cập
 
+/// @brief Lưu trữ lệnh di chuyển cuối cùng (tiến/lùi) để có thể tự động tiếp tục.
 std::string last_movement_command = "";
+/// @brief Mutex để bảo vệ truy cập vào `last_movement_command`.
 std::mutex last_command_mutex;
 
-// Biến toàn cục để điều khiển việc dừng các luồng một cách an toàn
+/// @brief Biến toàn cục để điều khiển việc dừng tất cả các luồng một cách an toàn.
 std::atomic<bool> global_running{true};
-// Cấu trúc Point2D đơn giản để tương thích với SystemState
+
+/**
+ * @struct Point2D
+ * @brief Cấu trúc dữ liệu đơn giản cho một điểm 2D.
+ */
 struct Point2D {
     float x, y;
 };
-// SYSTEM STATE STRUCT
+
+/**
+ * @struct SystemState
+ * @brief Cấu trúc dữ liệu trung tâm, chia sẻ trạng thái của toàn bộ hệ thống giữa các luồng.
+ * @details Mọi truy cập vào các thành viên của cấu trúc này phải được bảo vệ bởi `state_mutex`.
+ */
 struct SystemState {
-    std::mutex state_mutex;
+    std::mutex state_mutex; ///< Mutex để bảo vệ tất cả các thành viên trong struct này.
 
      // Battery data
     double battery_level = 0.0;
@@ -91,37 +110,40 @@ struct SystemState {
     // PLC data
     bool plc_connected = false;
     std::string last_plc_status = "Chưa có dữ liệu PLC";
+    bool battery_connected = false;
+    bool server_connected = false;
 
 
     // LiDAR data
-    std::string last_lidar_data = "Chưa có dữ liệu Lidar";
-    bool lidar_connected = false;
-    std::vector<Point2D> latest_convex_hull;
-    int total_stable_hulls = 0;
+    std::string last_lidar_data = "Chưa có dữ liệu Lidar"; ///< Chuỗi trạng thái cuối cùng từ LiDAR.
+    bool lidar_connected = false; ///< Trạng thái kết nối của LiDAR.
+    std::vector<Point2D> latest_convex_hull; ///< Tập hợp các điểm ổn định gần nhất từ LiDAR.
+    int total_stable_hulls = 0; ///< Tổng số lần dữ liệu LiDAR được xác định là ổn định.
     //int total_scan_count = 0;
 
     // Safety data
-    bool is_safe_to_move = false;           // Cờ an toàn từ LiDAR realtime
-    float current_front_distance = -1.0f;  // Khoảng cách phía trước hiện tại (cm)
-    long last_safety_update = 0;           // Timestamp cập nhật an toàn cuối cùng
+    bool is_safe_to_move = false;           ///< Cờ an toàn từ LiDAR, `true` nếu không có vật cản trong vùng nguy hiểm.
+    float current_front_distance = -1.0f;  ///< Khoảng cách gần nhất đến vật cản phía trước (cm).
+    long last_safety_update = 0;           ///< Dấu thời gian của lần cập nhật trạng thái an toàn cuối cùng.
 
     //Tracking cho smooth acceleration
-    bool is_moving = false;
-    std::chrono::steady_clock::time_point movement_start_time;
-    int current_speed = 0;
-    int target_speed = 0;
-    // Kiểm soát việc có đang trong lệnh di chuyển hay không
-    bool movement_command_active = false;  // Cờ này sẽ được set khi nhận lệnh W/S/A/D
+    bool is_moving = false; ///< Cờ cho biết AGV có đang trong quá trình di chuyển hay không.
+    std::chrono::steady_clock::time_point movement_start_time; ///< Thời điểm bắt đầu di chuyển.
+    int current_speed = 0; ///< Tốc độ hiện tại của AGV.
+    int target_speed = 0; ///< Tốc độ mục tiêu mà AGV đang hướng tới.
+    bool movement_command_active = false;  ///< Cờ này được set khi có lệnh di chuyển (W/S/A/D) và reset khi dừng.
 };
 
-// Queue để truyền convex hull giữa các thread
-// Communication queues
+/// @brief Hàng đợi để truyền các điểm LiDAR ổn định từ luồng LiDAR đến luồng server.
 ThreadSafeQueue<std::vector<Point2D>> stable_points_queue;
 //ThreadSafeQueue<std::string> lidar_status_queue;
 
 //-----------------------------------------------------------------------------//
-
-// --- LỚP KEYBOARD LISTENER ---
+// ------------------------ LỚP KEYBOARD LISTENER ----------------------------//
+/**
+ * @class SimpleKeyboardListener
+ * @brief Lớp lắng nghe sự kiện bàn phím ở chế độ không đệm (non-canonical) trên Linux.
+ */
 class SimpleKeyboardListener {
 private:
     struct termios oldSettings, newSettings;
@@ -137,6 +159,10 @@ public:
     ~SimpleKeyboardListener() {
         tcsetattr(STDIN_FILENO, TCSANOW, &oldSettings);
     }
+    /**
+     * @brief Đọc một ký tự từ bàn phím mà không cần nhấn Enter.
+     * @return Ký tự được đọc, hoặc 0 nếu không có ký tự nào. Các phím mũi tên được chuyển thành W, A, S, D.
+     */
     char getChar() {
         char ch = 0;
         if (read(STDIN_FILENO, &ch, 1) > 0) {
@@ -236,7 +262,10 @@ std::string parseAndExecutePlcCommand(const std::string& command, MCProtocol& pl
 
 
 /**
- * @brief Hàm khởi tạo hệ thống - gửi lệnh D110_1 khi bắt đầu (CHỈ MỘT LẦN)
+ * @brief Hàm khởi tạo hệ thống, được gọi một lần duy nhất khi bắt đầu.
+ * @details Gửi lệnh `WRITE_D110_1` đến PLC để báo hiệu hệ thống đã sẵn sàng.
+ * @param plc_command_queue Hàng đợi lệnh để gửi lệnh đến PLC.
+ * @param plc_result_queue Hàng đợi để nhận kết quả từ PLC.
  */
 void initializeSystem(ThreadSafeQueue<std::string>& plc_command_queue,
                      ThreadSafeQueue<std::string>& plc_result_queue) {
@@ -255,6 +284,12 @@ void initializeSystem(ThreadSafeQueue<std::string>& plc_command_queue,
     }
 }
 
+/**
+ * @brief Tính toán tốc độ mục tiêu dựa trên khoảng cách đến vật cản.
+ * @details Sử dụng hàm ánh xạ tuyến tính theo từng đoạn để tạo ra đường cong tốc độ mượt mà.
+ * @param distance Khoảng cách đến vật cản (cm).
+ * @return Tốc độ mục tiêu (giá trị số nguyên cho PLC).
+ */
 double calculateSpeed(double distance) {
     // Đảm bảo khoảng cách nằm trong range [50, 400]
     distance = std::max(50.0, std::min(400.0, distance));
@@ -277,6 +312,13 @@ double calculateSpeed(double distance) {
     }
 }
 
+/**
+ * @brief Tính toán tốc độ mượt mà, có gia tốc và giảm tốc.
+ * @param state Trạng thái hệ thống, được dùng để lưu `current_speed` và `movement_start_time`.
+ * @param distance_cm Khoảng cách đến vật cản phía trước (cm).
+ * @param movement_active `true` nếu có lệnh di chuyển đang được kích hoạt.
+ * @return Tốc độ đã được làm mượt để gửi đến PLC.
+ */
 int calculateSmoothSpeed(SystemState& state, float distance_cm, bool movement_active) {
     // Nếu không có lệnh di chuyển, trả về 0
     if (!movement_active) {
@@ -329,8 +371,11 @@ int calculateSmoothSpeed(SystemState& state, float distance_cm, bool movement_ac
 }
 
 /**
- * @brief Background safety monitor thread - kiểm tra khoảng cách liên tục
- * và gửi lệnh dừng khẩn cấp khi cần thiết
+ * @brief Luồng giám sát an toàn.
+ * @details Liên tục kiểm tra cờ an toàn từ luồng LiDAR. Nếu phát hiện nguy hiểm, nó sẽ gửi lệnh dừng khẩn cấp.
+ *          Nếu vùng nguy hiểm được giải tỏa, nó sẽ tự động gửi lại lệnh di chuyển cuối cùng.
+ * @param plc_command_queue Hàng đợi để gửi lệnh dừng/tiếp tục đến PLC.
+ * @param system_state Trạng thái hệ thống để đọc cờ an toàn và khoảng cách.
  */
 void safety_monitor_thread(ThreadSafeQueue<std::string>& plc_command_queue,
                            SystemState& system_state) {
@@ -398,7 +443,9 @@ void safety_monitor_thread(ThreadSafeQueue<std::string>& plc_command_queue,
 }
 
 /**
- * @brief Luồng cho các tác vụ PLC định kỳ (ví dụ: heartbeat, ghi dữ liệu liên tục)
+ * @brief Luồng cho các tác vụ PLC định kỳ.
+ * @details Gửi các lệnh lặp lại theo chu kỳ đến PLC, ví dụ như heartbeat để giữ kết nối.
+ * @param plc_command_queue Hàng đợi để gửi lệnh đến PLC.
  */
 void plc_periodic_tasks_thread(ThreadSafeQueue<std::string>& plc_command_queue) {
     LOG_INFO << "[PLC Periodic] Thread started. Will write D200=1 every 500ms.";
@@ -419,7 +466,11 @@ void plc_periodic_tasks_thread(ThreadSafeQueue<std::string>& plc_command_queue) 
 
 
 /**
- * @brief PLC Thread Function (UPDATED)
+ * @brief Luồng xử lý giao tiếp với PLC.
+ * @details Luồng này kết nối đến PLC, xử lý các lệnh từ `command_queue`, và giám sát các thanh ghi quan trọng.
+ * @param state Trạng thái hệ thống để cập nhật `plc_connected`.
+ * @param command_queue Hàng đợi nhận lệnh để thực thi.
+ * @param result_queue Hàng đợi để gửi lại kết quả.
  */
 void plc_thread_func(SystemState& state,
                     ThreadSafeQueue<std::string>& command_queue,
@@ -548,7 +599,11 @@ void plc_thread_func(SystemState& state,
 }
 
 /**
- * @brief Luồng quản lý keyboard - lắng nghe bàn phím và điều phối các worker
+ * @brief Luồng điều khiển bằng bàn phím.
+ * @details Lắng nghe các phím bấm (W, A, S, D, 0) và gửi các lệnh di chuyển/dừng tương ứng vào hàng đợi của PLC.
+ * @param plc_command_queue Hàng đợi để gửi lệnh đến PLC.
+ * @param plc_result_queue Hàng đợi để nhận kết quả (dùng cho khởi tạo).
+ * @param system_state Trạng thái hệ thống để kiểm tra cờ an toàn.
  */
 void keyboard_control_thread(ThreadSafeQueue<std::string>& plc_command_queue,
                             ThreadSafeQueue<std::string>& plc_result_queue,
@@ -731,7 +786,15 @@ void keyboard_control_thread(ThreadSafeQueue<std::string>& plc_command_queue,
 }
 
 
-// LIDAR THREAD WITH SLAM PROCESSING
+/**
+ * @brief Luồng xử lý dữ liệu LiDAR.
+ * @details Luồng này khởi tạo Lidar, bắt đầu nhận dữ liệu và xử lý theo hai chế độ:
+ *          1. **Realtime**: Phản hồi nhanh để phát hiện vật cản và điều chỉnh tốc độ.
+ *          2. **Stable**: Dữ liệu được lọc và ổn định hóa, sau đó gửi đến luồng server.
+ * @param state Trạng thái hệ thống để cập nhật dữ liệu LiDAR và cờ an toàn.
+ * @param points_queue Hàng đợi để gửi các điểm ổn định đến luồng server.
+ * @param plc_command_queue Hàng đợi để gửi lệnh điều chỉnh tốc độ đến PLC.
+ */
 void lidar_thread_func(
     SystemState& state,
     ThreadSafeQueue<std::vector<Point2D>>& points_queue, 
@@ -933,7 +996,11 @@ void lidar_thread_func(
     LOG_INFO << "[LiDAR Thread] Stopped successfully.";
 }
 
-// Luồng giám sát Pin
+/**
+ * @brief Luồng giám sát pin.
+ * @details Định kỳ đọc dữ liệu từ JBD BMS qua cổng serial và cập nhật mức pin vào `SystemState`.
+ * @param state Trạng thái hệ thống để cập nhật `battery_level` và `battery_connected`.
+ */
 void battery_thread_func(SystemState& state) {
     LOG_INFO << "[Battery Thread] Starting...";
 
@@ -957,6 +1024,7 @@ void battery_thread_func(SystemState& state) {
             // Cập nhật vào SystemState một cách an toàn
             {
                 std::lock_guard<std::mutex> lock(state.state_mutex);
+                state.battery_connected = true;
                 state.battery_level = data.stateOfCharge; // Cập nhật mức pin (%)
             }
             LOG_DEBUG << "[Battery Thread] Updated battery level: " << data.stateOfCharge << "%";
@@ -964,13 +1032,20 @@ void battery_thread_func(SystemState& state) {
             LOG_WARNING << "[Battery Thread] Failed to update BMS data. Will retry.";
         }
 
+        // Nếu không cập nhật được, đánh dấu là mất kết nối
+        std::lock_guard<std::mutex> lock(state.state_mutex);
+        state.battery_connected = bms.isConnectionValid();
+
         std::this_thread::sleep_for(std::chrono::seconds(20));
     }
 }
 
-// Luồng Webserver
 /**
- * @brief Thread giao tiếp với server
+ * @brief Luồng giao tiếp với server.
+ * @details Quản lý kết nối TCP đến server, định kỳ gửi các gói tin trạng thái (`AGVStatusPacket`),
+ *          và xử lý các lệnh nhận được từ server.
+ * @param state Trạng thái hệ thống để lấy dữ liệu gửi đi.
+ * @param lidar_points_queue Hàng đợi để nhận các điểm LiDAR ổn định cần gửi.
  */
 void server_communication_thread(SystemState& state,
                                 ThreadSafeQueue<std::vector<Point2D>>& lidar_points_queue) {
@@ -1013,6 +1088,10 @@ void server_communication_thread(SystemState& state,
             packet.battery_level = state.battery_level;
             packet.current_speed = state.current_speed;
             packet.timestamp = state.last_safety_update;
+            packet.plc_connected = state.plc_connected;
+            packet.lidar_connected = state.lidar_connected;
+            packet.battery_connected = state.battery_connected;
+            packet.server_connected = state.server_connected;
         }
         
         return packet;
@@ -1085,7 +1164,8 @@ void server_communication_thread(SystemState& state,
         
         // Update system state
         std::lock_guard<std::mutex> lock(state.state_mutex);
-        // Có thể thêm biến server_connected vào SystemState
+        state.server_connected = connected;
+
     });
     
     // Bắt đầu giao tiếp
@@ -1163,7 +1243,10 @@ void server_communication_thread(SystemState& state,
 }
 
 
-// HÀM MAIN
+/**
+ * @brief Hàm main của chương trình.
+ * @details Khởi tạo logging, kiểm tra kết nối server, và khởi chạy tất cả các luồng của hệ thống.
+ */
 int main() {
     // Initialize logging system
     // Register MAIN app and context
@@ -1171,15 +1254,32 @@ int main() {
     LOG_REGISTER_CONTEXT("MAIN", "Main Control Context");
     LOG_SET_APP("MAIN");
     LOG_SET_CONTEXT("MAIN");
+
+    // --- BƯỚC 1: KIỂM TRA KẾT NỐI SERVER TRƯỚC KHI CHẠY ---
+    LOG_INFO << "[Main Thread] Checking server connection before starting...";
+    auto comm_server_check = std::make_unique<ServerComm::CommunicationServer>(SERVER_IP, SERVER_PORT);
+    bool server_ok = false;
+    while (!server_ok && global_running) { // Thử kết nối lại liên tục
+        if (comm_server_check->connect()) {
+            LOG_INFO << "[Main Thread] Server connection successful.";
+            server_ok = true;
+            comm_server_check->disconnect();
+        } else {
+            LOG_WARNING << "[Main Thread] Server connection failed, retrying in 3 seconds...";
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+        }
+    }
+
     LOG_INFO << "[Main Thread] Control system starting...";
 
-
-
+    // --- BƯỚC 2: KHỞI TẠO CÁC BIẾN TRẠNG THÁI VÀ HÀNG ĐỢI ---
     SystemState shared_state;
 
     ThreadSafeQueue<std::string> plc_command_queue;
     ThreadSafeQueue<std::string> plc_result_queue;
 
+
+    // --- BƯỚC 3: KHỞI CHẠY CÁC LUỒNG ---
     // Start PLC thread
     std::thread plc_thread(plc_thread_func, 
                           std::ref(shared_state), 
@@ -1215,7 +1315,8 @@ int main() {
     std::thread battery_thread(battery_thread_func, std::ref(shared_state)); 
 
 
-    // Vòng lặp chính của main thread có thể để trống hoặc làm nhiệm vụ giám sát
+    // --- BƯỚC 4: VÒNG LẶP CHÍNH CỦA MAIN THREAD ---
+    // Vòng lặp này có thể để trống hoặc thực hiện các tác vụ giám sát cấp cao.
     while (global_running) {
         // Có thể in ra trạng thái hệ thống ở đây để theo dõi
         std::this_thread::sleep_for(std::chrono::seconds(5));
@@ -1238,52 +1339,14 @@ int main() {
         // Có thể thêm điều kiện để dừng chương trình, ví dụ: nhấn phím
     }
 
-    
-    // // Test commands
-    // std::vector<std::string> test_commands = {
-    //     "READ_D100",
-    //     "READ_D101",
-    //     "WRITE_D100_1234",
-    //     "READ_D100",
-    //     "WRITE_D101_5678",
-    //     "READ_D101",
-    //     "INVALID_COMMAND"
-    // };
-
-    // int command_index = 0;
-    // int total_commands = test_commands.size();
-    // auto last_command_time = std::chrono::steady_clock::now();
-    // const auto command_interval = std::chrono::seconds(5);
-
-    // while (global_running) {
-    //     auto current_time = std::chrono::steady_clock::now();
-        
-    //     // Send test commands periodically
-    //     if (current_time - last_command_time >= command_interval) {
-    //         std::string command = test_commands[command_index % total_commands];
-    //         std::cout << "\n[Main Thread] Sending PLC command: " << command << std::endl;
-    //         plc_command_queue.push(command);
-
-    //         // Wait for response
-    //         std::string result;
-    //         if (plc_result_queue.pop(result, 3000)) { // 3 second timeout
-    //             std::cout << "[Main Thread] PLC Response: " << result << std::endl;
-    //         } else {
-    //             std::cout << "[Main Thread] Timeout waiting for PLC response!" << std::endl;
-    //         }
-
-    //         command_index++;
-    //         last_command_time = current_time;
-    //     }
-    //     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    // }
-
+    // --- BƯỚC 5: DỌN DẸP VÀ THOÁT ---
     LOG_INFO << "[Main Thread] Initiating shutdown...";
     
     // Stop all threads gracefully
     global_running = false;
     
     // Join all threads
+    // Đảm bảo chương trình chính đợi tất cả các luồng con kết thúc trước khi thoát.
      for (auto& thread : {&plc_thread, &lidar_thread, &keyboard_thread, &safety_thread, &plc_periodic_thread, &server_thread, &battery_thread}) {
         if (thread->joinable()) {
             thread->join();
