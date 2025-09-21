@@ -24,6 +24,7 @@
 #include "MCprotocollib/MCprotocol.h"
 #include "Lidarlib/Lidarlib.h"
 #include "Serverlib/servercommunicator.h"
+#include "Batterylib/BatteryJBD.h"
 
 // THREAD-SAFE QUEUE
 template <typename T>
@@ -933,18 +934,39 @@ void lidar_thread_func(
 }
 
 // Luồng giám sát Pin
-// void battery_thread_func(SystemState& state) {
-//     std::cout << "[Battery Thread] Khởi động." << std::endl;
-//     while (true) {
-//         // --- Placeholder: Đọc giá trị từ cảm biến Pin ---
-//         double current_battery = 85.5 + (rand() % 10) / 10.0;
-//         {
-//             std::lock_guard<std::mutex> lock(state.state_mutex);
-//             state.battery_level = current_battery;
-//         }
-//         std::this_thread::sleep_for(std::chrono::seconds(5));
-//     }
-// }
+void battery_thread_func(SystemState& state) {
+    LOG_INFO << "[Battery Thread] Starting...";
+
+    // Lấy instance của BMS singleton
+    JBDBMSSingleton& bms = JBDBMSSingleton::getInstance(BATTERY_BMS_SERIAL_PORT);
+
+    // Khởi tạo kết nối
+    if (!bms.initialize()) {
+        LOG_ERROR << "[Battery Thread] Failed to initialize BMS connection on " << BATTERY_BMS_SERIAL_PORT;
+        return;
+    }
+
+    LOG_INFO << "[Battery Thread] BMS Connected. Starting data polling.";
+
+    while (global_running) {
+        // Cập nhật dữ liệu từ BMS
+        if (bms.updateBatteryData()) {
+            // Lấy dữ liệu đã cập nhật
+            BatteryData data = bms.getBatteryData();
+
+            // Cập nhật vào SystemState một cách an toàn
+            {
+                std::lock_guard<std::mutex> lock(state.state_mutex);
+                state.battery_level = data.stateOfCharge; // Cập nhật mức pin (%)
+            }
+            LOG_DEBUG << "[Battery Thread] Updated battery level: " << data.stateOfCharge << "%";
+        } else {
+            LOG_WARNING << "[Battery Thread] Failed to update BMS data. Will retry.";
+        }
+
+        std::this_thread::sleep_for(std::chrono::seconds(20));
+    }
+}
 
 // Luồng Webserver
 /**
@@ -968,9 +990,9 @@ void server_communication_thread(SystemState& state,
             std::lock_guard<std::mutex> lock(state.state_mutex);
             
             // Vị trí hiện tại (giả định có thêm trong SystemState)
-            packet.current_x = 0.0f;  // TODO: Lấy từ odometry/SLAM
-            packet.current_y = 0.0f;
-            packet.current_angle = 0.0f;
+            // packet.current_x = 0.0f;  // TODO: Lấy từ odometry/SLAM
+            // packet.current_y = 0.0f;
+            // packet.current_angle = 0.0f;
             
             // Trạng thái PLC - Đọc các thanh ghi quan trọng
             packet.plc_registers["D100"] = 0;  // Direction
@@ -1190,7 +1212,7 @@ int main() {
                             std::ref(stable_points_queue));
     
     //Battery thread
-    // std::thread battery_thread(battery_thread_func, std::ref(shared_state)); 
+    std::thread battery_thread(battery_thread_func, std::ref(shared_state)); 
 
 
     // Vòng lặp chính của main thread có thể để trống hoặc làm nhiệm vụ giám sát
@@ -1262,7 +1284,7 @@ int main() {
     global_running = false;
     
     // Join all threads
-     for (auto& thread : {&plc_thread, &lidar_thread, &keyboard_thread, &safety_thread, &plc_periodic_thread, &server_thread}) {
+     for (auto& thread : {&plc_thread, &lidar_thread, &keyboard_thread, &safety_thread, &plc_periodic_thread, &server_thread, &battery_thread}) {
         if (thread->joinable()) {
             thread->join();
             LOG_INFO << "[Main Thread] Thread joined";
