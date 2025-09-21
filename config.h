@@ -36,6 +36,9 @@
 //----------------------------------------------------//
 //===================== Cấu hình hệ thống ==================---//
 
+//Battery port
+#define BATTERY_BMS_SERIAL_PORT "/dev/ttyAMA0"
+
 //Config chung
 #ifndef M_PI
 #define M_PI 3.14159265358979323846

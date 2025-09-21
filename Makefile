@@ -27,6 +27,7 @@ all: $(TARGET)
 # Link the executable - THÊM $(LIBS) vào đây
 $(TARGET): $(OBJECTS)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LIBS)
+	@chmod 777 $(TARGET)
 
 # Compile source files
 %.o: %.cpp
