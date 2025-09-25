@@ -204,15 +204,20 @@ echo "--> Tạo tệp /etc/systemd/system/control_system_agv.service..."
 cat > /etc/systemd/system/control_system_agv.service << 'EOF'
 [Unit]
 Description=My C++ Application Service AGV
-After=network.target getty@tty1.service dlt-daemon.service dlt-logger.service dlt-permissions.service
+# Chỉ cần đợi dịch vụ cuối cùng trong chuỗi DLT và đợi mạng online
+#After=network-online.target dlt-permissions.service
+After= dlt-permissions.service
+# Yêu cầu mạng online và dịch vụ DLT phải chạy thành công
+#Wants=network-online.target
+Requires=dlt-permissions.service
 
 [Service]
-ExecStart=/home/kautopi/Documents/Mark_I/control_system
+#ExecStart=/home/kautopi/Documents/Mark_I/control_system
+ExecStart=/usr/local/bin/control_system
 WorkingDirectory=/home/kautopi/Documents/Mark_I
 StandardOutput=inherit
 StandardError=inherit
 Restart=always
-User=kautopi
 
 [Install]
 WantedBy=multi-user.target

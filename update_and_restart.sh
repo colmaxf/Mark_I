@@ -11,7 +11,16 @@ echo "----------------------------------------------------"
 # Bước 1: Chạy lệnh 'make' để biên dịch code
 echo ">> Bước 1: Đang chạy 'make' để build tệp thực thi mới..."
 make
+# -f là viết tắt của "file", nó kiểm tra xem đường dẫn có tồn tại và là một file hay không
+if [ -f "/usr/local/bin/control_system" ]; then
+  echo "File tồn tại. Đang xóa..."
+  sudo rm -rf /usr/local/bin/control_system
+else
+  echo "File không tồn tại, không cần làm gì cả."
+fi
 
+echo "copy sang usr/local/bin/control_system"
+sudo cp /home/kautopi/Documents/Mark_I/control_system /usr/local/bin/
 # Bước 2: Kiểm tra xem 'make' có thành công không
 # Lệnh 'if [ $? -eq 0 ]' kiểm tra mã thoát của lệnh cuối cùng. 0 nghĩa là thành công.
 if [ $? -eq 0 ]; then
@@ -20,6 +29,8 @@ if [ $? -eq 0 ]; then
 
     # Bước 3: Khởi động lại dịch vụ systemd
     echo ">> Bước 2: Đang khởi động lại dịch vụ '$SERVICE_NAME'..."
+    sudo systemctl stop $SERVICE_NAME
+    sleep 2
     sudo systemctl daemon-reload
     sleep 2
     sudo systemctl restart $SERVICE_NAME
@@ -31,6 +42,8 @@ if [ $? -eq 0 ]; then
     echo ">> Bước 3: Kiểm tra trạng thái dịch vụ (chờ 2 giây)..."
     sleep 2
     sudo systemctl status $SERVICE_NAME
+    exit 1
+    echo "----------------------------------------------------"
 else
     # Thông báo lỗi nếu 'make' thất bại
     echo ">> LỖI: Quá trình build thất bại! Dịch vụ '$SERVICE_NAME' KHÔNG được khởi động lại."
