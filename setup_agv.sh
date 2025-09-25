@@ -230,37 +230,37 @@ echo "===================================================="
 echo ">> Bước 3: Tải lại, kích hoạt và khởi động các dịch vụ systemd..."
 
 # Tải lại daemon để nhận diện các file service mới
-systemctl daemon-reload
+sudo systemctl daemon-reload
 
 # Kích hoạt các dịch vụ để tự khởi động cùng hệ thống
 echo "--> Kích hoạt các dịch vụ..."
-systemctl enable dlt-daemon.service
-systemctl enable dlt-logger.service
-systemctl enable dlt-permissions.service
-systemctl enable control_system_agv.service
+sudo systemctl enable dlt-daemon.service
+sudo systemctl enable dlt-logger.service
+sudo systemctl enable dlt-permissions.service
+sudo systemctl enable control_system_agv.service
 
 # Khởi động lại các dịch vụ theo đúng thứ tự
 echo "--> Khởi động lại các dịch vụ (có thể mất vài giây)..."
-systemctl restart dlt-daemon.service
+sudo systemctl restart dlt-daemon.service
 sleep 3
-systemctl restart dlt-logger.service
+sudosystemctl restart dlt-logger.service
 sleep 3
-systemctl restart dlt-permissions.service
+sudo systemctl restart dlt-permissions.service
 sleep 3
-systemctl restart control_system_agv.service
+sudo systemctl restart control_system_agv.service
 echo "OK"
 echo "===================================================="
 
 # --- Bước 4: Kiểm tra trạng thái các dịch vụ ---
 echo ">> Bước 4: Kiểm tra trạng thái các dịch vụ đã cài đặt..."
 echo ""
-systemctl status dlt-daemon.service --no-pager
+sudo systemctl status dlt-daemon.service --no-pager
 echo "----------------------------------------------------"
-systemctl status dlt-logger.service --no-pager
+sudo systemctl status dlt-logger.service --no-pager
 echo "----------------------------------------------------"
-systemctl status dlt-permissions.service --no-pager
+sudo systemctl status dlt-permissions.service --no-pager
 echo "----------------------------------------------------"
-systemctl status control_system_agv.service --no-pager
+sudo systemctl status control_system_agv.service --no-pager
 
 echo "===================================================="
 echo ">> Quá trình cài đặt đã hoàn tất!"
