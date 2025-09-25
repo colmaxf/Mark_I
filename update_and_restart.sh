@@ -20,6 +20,8 @@ if [ $? -eq 0 ]; then
 
     # Bước 3: Khởi động lại dịch vụ systemd
     echo ">> Bước 2: Đang khởi động lại dịch vụ '$SERVICE_NAME'..."
+    sudo systemctl daemon-reload
+    sleep 2
     sudo systemctl restart $SERVICE_NAME
 
     echo ">> Dịch vụ đã được yêu cầu khởi động lại."
