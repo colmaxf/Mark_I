@@ -1041,23 +1041,126 @@ void battery_thread_func(SystemState& state) {
 }
 
 /**
+ * @brief Luồng xử lý lệnh điều khiển từ server.
+ * @details Luồng này thay thế keyboard_control_thread, lắng nghe các lệnh từ server
+ *          và gửi các hành động tương ứng vào hàng đợi của PLC.
+ * @param plc_command_queue Hàng đợi để gửi lệnh đến PLC.
+ * @param comm_server Đối tượng CommunicationServer để lấy lệnh.
+ * @param system_state Trạng thái hệ thống để kiểm tra cờ an toàn.
+ */
+void server_command_thread(ThreadSafeQueue<std::string>& plc_command_queue,
+                           ServerComm::CommunicationServer& comm_server,
+                           SystemState& system_state) {
+    LOG_REGISTER_CONTEXT("CMD_HANDLER", "Server Command Handler Thread");
+    LOG_SET_CONTEXT("CMD_HANDLER");
+
+    LOG_INFO << "Thread started. Waiting for commands from server...";
+
+    while (global_running) {
+        ServerComm::NavigationCommand cmd;
+        // Lấy lệnh từ hàng đợi của server, chờ tối đa 100ms
+        if (comm_server.getNextCommand(cmd)) {
+            LOG_INFO << "Processing command type: " << cmd.type;
+
+            bool is_safe = true;
+            float front_distance = -1.0f;
+            {
+                std::lock_guard<std::mutex> lock(system_state.state_mutex);
+                is_safe = system_state.is_safe_to_move;
+                front_distance = system_state.current_front_distance;
+            }
+
+            if (plc_in_error_state) {
+                LOG_ERROR << "Command ignored! PLC is in error state (D102=5). Waiting for reset.";
+                continue;
+            }
+
+            switch (cmd.type) {
+                case ServerComm::NavigationCommand::MOVE_TO_POINT:
+                case ServerComm::NavigationCommand::FOLLOW_PATH: {
+                    // Logic di chuyển tiến
+                    std::string move_cmd = "WRITE_D100_1";
+                    {
+                        std::lock_guard<std::mutex> lock(last_command_mutex);
+                        last_movement_command = move_cmd;
+                    }
+
+                    if (is_safe) {
+                        LOG_INFO << "Executing movement command from server.";
+                        {
+                            std::lock_guard<std::mutex> lock(system_state.state_mutex);
+                            system_state.movement_command_active = true;
+                            system_state.is_moving = false;
+                            system_state.target_speed = 0;
+                        }
+                        plc_command_queue.push("WRITE_D101_0"); // Đảm bảo đi thẳng
+                        plc_command_queue.push(move_cmd);
+                    } else {
+                        LOG_WARNING << "Cannot execute movement - obstacle at " << front_distance
+                                    << "cm! Will auto-start when clear.";
+                    }
+                    break;
+                }
+
+                case ServerComm::NavigationCommand::ROTATE_TO_ANGLE: {
+                    // Logic xoay (giả sử xoay trái)
+                    if (is_safe) {
+                        LOG_INFO << "Executing rotation command from server.";
+                        {
+                            std::lock_guard<std::mutex> lock(system_state.state_mutex);
+                            system_state.movement_command_active = true;
+                            system_state.is_moving = false;
+                            system_state.target_speed = 0;
+                        }
+                        plc_command_queue.push("WRITE_D100_1");
+                        plc_command_queue.push("WRITE_D101_1"); // Xoay trái
+                    } else {
+                        LOG_WARNING << "Cannot execute rotation - obstacle at " << front_distance << "cm";
+                    }
+                    break;
+                }
+
+                case ServerComm::NavigationCommand::STOP:
+                case ServerComm::NavigationCommand::EMERGENCY_STOP: {
+                    LOG_INFO << "Executing STOP command from server.";
+                    plc_command_queue.push("WRITE_D100_0");
+                    plc_command_queue.push("WRITE_D101_0");
+                    {
+                        std::lock_guard<std::mutex> lock(last_command_mutex);
+                        last_movement_command.clear();
+                    }
+                    {
+                        std::lock_guard<std::mutex> lock(system_state.state_mutex);
+                        system_state.movement_command_active = false;
+                        system_state.is_moving = false;
+                        system_state.current_speed = 0;
+                    }
+                    break;
+                }
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    LOG_INFO << "Thread stopped.";
+}
+
+
+/**
  * @brief Luồng giao tiếp với server.
  * @details Quản lý kết nối TCP đến server, định kỳ gửi các gói tin trạng thái (`AGVStatusPacket`),
  *          và xử lý các lệnh nhận được từ server.
  * @param state Trạng thái hệ thống để lấy dữ liệu gửi đi.
  * @param lidar_points_queue Hàng đợi để nhận các điểm LiDAR ổn định cần gửi.
  */
-void server_communication_thread(SystemState& state,
+void server_communication_thread(SystemState& state, 
+                                ServerComm::CommunicationServer& comm_server,
                                 ThreadSafeQueue<std::vector<Point2D>>& lidar_points_queue) {
     
     LOG_INFO << "[Server Comm] Starting communication thread...";
     
-    // Tạo CommunicationServer instance
-    auto comm_server = std::make_unique<ServerComm::CommunicationServer>(
-        SERVER_IP, SERVER_PORT, COMM_SEND_INTERVAL_MS);
-    
     // Đăng ký callback để lấy status từ hệ thống
-    comm_server->setStatusCallback([&state]() -> ServerComm::AGVStatusPacket {
+    comm_server.setStatusCallback([&state]() -> ServerComm::AGVStatusPacket {
         ServerComm::AGVStatusPacket packet;
         
         // Lock state để đọc dữ liệu an toàn
@@ -1069,13 +1172,27 @@ void server_communication_thread(SystemState& state,
             // packet.current_y = 0.0f;
             // packet.current_angle = 0.0f;
             
-            // Trạng thái PLC - Đọc các thanh ghi quan trọng
-            packet.plc_registers["D100"] = 0;  // Direction
-            packet.plc_registers["D101"] = 0;  // Turn
-            packet.plc_registers["D102"] = 0;  // Status
-            packet.plc_registers["D103"] = state.current_speed;  // Speed
-            packet.plc_registers["D110"] = 0;  // System state
-            
+            // Lấy giá trị PLC từ global pointer
+            {
+                std::lock_guard<std::mutex> lock(plc_ptr_mutex);
+                if (global_plc_ptr && global_plc_ptr->isConnected()) {
+                    try {
+                        // Đọc các thanh ghi quan trọng
+                        packet.plc_registers["D100"] = global_plc_ptr->readSingleWord("D", 100);
+                        packet.plc_registers["D101"] = global_plc_ptr->readSingleWord("D", 101);
+                        packet.plc_registers["D102"] = global_plc_ptr->readSingleWord("D", 102);
+                        packet.plc_registers["D103"] = global_plc_ptr->readSingleWord("D", 103);
+                        packet.plc_registers["D110"] = global_plc_ptr->readSingleWord("D", 110);
+                        packet.plc_registers["D200"] = global_plc_ptr->readSingleWord("D", 200);
+                    } catch (const std::exception& e) {
+                        LOG_ERROR << "[Server Comm Callback] Failed to read PLC: " << e.what();
+                    }
+                } else {
+                    // Gán giá trị mặc định nếu không kết nối được PLC
+                    packet.plc_registers["D103"] = state.current_speed;
+                }
+            }
+
             // Copy LiDAR points
             packet.lidar_points.reserve(state.latest_convex_hull.size());
             for (const auto& p : state.latest_convex_hull) {
@@ -1159,17 +1276,16 @@ void server_communication_thread(SystemState& state,
     // });
     
     // Đăng ký callback kết nối
-    comm_server->setConnectionCallback([&state](bool connected) {
+    comm_server.setConnectionCallback([&state](bool connected) {
         LOG_INFO << "[Server Comm] Connection status: " << (connected ? "Connected" : "Disconnected");
         
         // Update system state
         std::lock_guard<std::mutex> lock(state.state_mutex);
         state.server_connected = connected;
-
     });
     
     // Bắt đầu giao tiếp
-    if (!comm_server->start()) {
+    if (!comm_server.start()) {
         LOG_ERROR << "[Server Comm] Failed to start communication";
         return;
     }
@@ -1181,56 +1297,55 @@ void server_communication_thread(SystemState& state,
         // Gửi LiDAR points khi có dữ liệu mới
         std::vector<Point2D> points;
         if (lidar_points_queue.pop(points, 100)) {
-            comm_server->sendLidarPoints(points);
+            comm_server.sendLidarPoints(points);
             LOG_DEBUG << "[Server Comm] Sent " << points.size() << " LiDAR points";
         }
         
-        // Định kỳ gửi PLC registers (mỗi 500ms)
-        static auto last_plc_send = std::chrono::steady_clock::now();
+        // In thống kê định kỳ
         auto now = std::chrono::steady_clock::now();
         
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_plc_send).count() >= 500) {
-            // Lấy giá trị PLC từ global pointer
-            std::map<std::string, uint16_t> plc_data;
+        // if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_plc_send).count() >= 200) {
+        //     // Lấy giá trị PLC từ global pointer
+        //     std::map<std::string, uint16_t> plc_data;
             
-            {
-                std::lock_guard<std::mutex> lock(plc_ptr_mutex);
-                if (global_plc_ptr && global_plc_ptr->isConnected()) {
-                    try {
-                        // Đọc các thanh ghi quan trọng
-                        plc_data["D100"] = global_plc_ptr->readSingleWord("D", 100);
-                        plc_data["D101"] = global_plc_ptr->readSingleWord("D", 101);
-                        plc_data["D102"] = global_plc_ptr->readSingleWord("D", 102);
-                        plc_data["D103"] = global_plc_ptr->readSingleWord("D", 103);
-                        plc_data["D110"] = global_plc_ptr->readSingleWord("D", 110);
-                        plc_data["D200"] = global_plc_ptr->readSingleWord("D", 200);
-                    } catch (const std::exception& e) {
-                        LOG_ERROR << "[Server Comm] Failed to read PLC: " << e.what();
-                    }
-                }
-            }
+        //     {
+        //         std::lock_guard<std::mutex> lock(plc_ptr_mutex);
+        //         if (global_plc_ptr && global_plc_ptr->isConnected()) {
+        //             try {
+        //                 // Đọc các thanh ghi quan trọng
+        //                 plc_data["D100"] = global_plc_ptr->readSingleWord("D", 100);
+        //                 plc_data["D101"] = global_plc_ptr->readSingleWord("D", 101);
+        //                 plc_data["D102"] = global_plc_ptr->readSingleWord("D", 102);
+        //                 plc_data["D103"] = global_plc_ptr->readSingleWord("D", 103);
+        //                 plc_data["D110"] = global_plc_ptr->readSingleWord("D", 110);
+        //                 plc_data["D200"] = global_plc_ptr->readSingleWord("D", 200);
+        //             } catch (const std::exception& e) {
+        //                 LOG_ERROR << "[Server Comm] Failed to read PLC: " << e.what();
+        //             }
+        //         }
+        //     }
             
-            if (!plc_data.empty()) {
-                comm_server->sendPLCRegisters(plc_data);
-                LOG_DEBUG << "[Server Comm] Sent PLC registers update";
-            }
+        //     if (!plc_data.empty()) {
+        //         comm_server->sendPLCRegisters(plc_data);
+        //         LOG_DEBUG << "[Server Comm] Sent PLC registers update";
+        //     }
             
-            last_plc_send = now;
-        }
+        //     last_plc_send = now;
+        // }
         
-        // Kiểm tra lệnh từ server
-        ServerComm::NavigationCommand cmd;
-        while (comm_server->getNextCommand(cmd)) {
-            LOG_INFO << "[Server Comm] Processing queued command type: " << cmd.type;
-            // Command đã được xử lý trong callback, chỉ log ở đây
-        }
+        // // Kiểm tra lệnh từ server
+        // ServerComm::NavigationCommand cmd;
+        // while (comm_server->getNextCommand(cmd)) {
+        //     LOG_INFO << "[Server Comm] Processing queued command type: " << cmd.type;
+        //     // Command đã được xử lý trong callback, chỉ log ở đây
+        // }
         
         // In thống kê định kỳ
         static auto last_stats = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::seconds>(now - last_stats).count() >= 10) {
-            LOG_INFO << "[Server Comm] Stats - Sent: " << comm_server->getTotalPacketsSent()
-                    << " Received: " << comm_server->getTotalPacketsReceived()
-                    << " Data rate: " << comm_server->getDataRate() << " KB/s";
+            LOG_INFO << "[Server Comm] Stats - Sent: " << comm_server.getTotalPacketsSent()
+                    << " | Received: " << comm_server.getTotalPacketsReceived()
+                    << " | Data rate: " << comm_server.getDataRate() << " KB/s";
             last_stats = now;
         }
         
@@ -1238,7 +1353,7 @@ void server_communication_thread(SystemState& state,
     }
     
     // Cleanup
-    comm_server->stop();
+    comm_server.stop();
     LOG_INFO << "[Server Comm] Thread stopped";
 }
 
@@ -1256,22 +1371,20 @@ int main() {
     LOG_SET_CONTEXT("MAIN");
 
     // --- BƯỚC 1: KIỂM TRA KẾT NỐI SERVER TRƯỚC KHI CHẠY ---
-    LOG_INFO << "[Main Thread] Checking server connection before starting...";
-    auto comm_server_check = std::make_unique<ServerComm::CommunicationServer>(SERVER_IP, SERVER_PORT);
-    bool server_ok = false;
-    while (!server_ok && global_running) { // Thử kết nối lại liên tục
-        if (comm_server_check->connect()) {
-            LOG_INFO << "[Main Thread] Server connection successful.";
-            server_ok = true;
-            comm_server_check->disconnect();
-        } else {
-            LOG_WARNING << "[Main Thread] Server connection failed, retrying in 3 seconds...";
-            std::this_thread::sleep_for(std::chrono::seconds(3));
-        }
+    LOG_INFO << "[Main Thread] Initializing server connection...";
+    auto comm_server = std::make_unique<ServerComm::CommunicationServer>(SERVER_IP, SERVER_PORT);
+    
+    while (!comm_server->connect() && global_running) {
+        LOG_WARNING << "[Main Thread] Server connection failed, retrying in 3 seconds...";
+        std::this_thread::sleep_for(std::chrono::seconds(3));
     }
 
-    LOG_INFO << "[Main Thread] Control system starting...";
-
+    if (global_running) {
+        LOG_INFO << "[Main Thread] Server connection successful. Starting system...";
+    } else {
+        LOG_WARNING << "[Main Thread] Shutdown requested during server connection. Exiting.";
+        return 0;
+    }
     // --- BƯỚC 2: KHỞI TẠO CÁC BIẾN TRẠNG THÁI VÀ HÀNG ĐỢI ---
     SystemState shared_state;
 
@@ -1293,10 +1406,14 @@ int main() {
                             std::ref(plc_command_queue));
     
     // Start Keyboard thread - KHÔNG TRUYỀN plc_ptr
-    std::thread keyboard_thread(keyboard_control_thread, 
-                               std::ref(plc_command_queue),
-                               std::ref(plc_result_queue),
-                               std::ref(shared_state));
+    // std::thread keyboard_thread(keyboard_control_thread, 
+    //                            std::ref(plc_command_queue),
+    //                            std::ref(plc_result_queue),
+    //                            std::ref(shared_state));
+
+    // Start Server Command Handler thread
+    std::thread command_handler_thread(server_command_thread,
+                                       std::ref(plc_command_queue), std::ref(*comm_server), std::ref(shared_state));
 
     std::thread safety_thread(safety_monitor_thread,
                              std::ref(plc_command_queue),
@@ -1308,7 +1425,7 @@ int main() {
 
     //Server thread
     std::thread server_thread(server_communication_thread,
-                            std::ref(shared_state),
+                            std::ref(shared_state), std::ref(*comm_server.get()),
                             std::ref(stable_points_queue));
     
     //Battery thread
@@ -1347,7 +1464,7 @@ int main() {
     
     // Join all threads
     // Đảm bảo chương trình chính đợi tất cả các luồng con kết thúc trước khi thoát.
-     for (auto& thread : {&plc_thread, &lidar_thread, &keyboard_thread, &safety_thread, &plc_periodic_thread, &server_thread, &battery_thread}) {
+     for (auto& thread : {&plc_thread, &lidar_thread,/* &keyboard_thread,*/ &command_handler_thread, &safety_thread, &plc_periodic_thread, &server_thread, &battery_thread}) {
         if (thread->joinable()) {
             thread->join();
             LOG_INFO << "[Main Thread] Thread joined";

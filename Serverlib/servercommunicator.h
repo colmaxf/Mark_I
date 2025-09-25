@@ -36,21 +36,29 @@ public:
     static bool parseCommand(const std::string& json_str, std::map<std::string, std::string>& result);
 };
 
-// Cấu trúc lệnh điều hướng từ server
+/**
+ * @struct NavigationCommand
+ * @brief Cấu trúc dữ liệu cho một lệnh điều hướng nhận được từ server.
+ * @details Bao gồm các loại lệnh khác nhau như di chuyển đến điểm, xoay, hoặc dừng.
+ */
 struct NavigationCommand {
+    /**
+     * @enum Type
+     * @brief Liệt kê các loại lệnh điều hướng có thể có.
+     */
     enum Type {
-        MOVE_TO_POINT = 0,
-        ROTATE_TO_ANGLE = 1,
-        FOLLOW_PATH = 2,
-        STOP = 3,
-        EMERGENCY_STOP = 4
+        MOVE_TO_POINT = 0,   ///< Di chuyển đến một điểm (x, y) cụ thể.
+        ROTATE_TO_ANGLE = 1, ///< Xoay đến một góc cụ thể.
+        FOLLOW_PATH = 2,     ///< Đi theo một danh sách các điểm (path).
+        STOP = 3,            ///< Dừng di chuyển một cách bình thường.
+        EMERGENCY_STOP = 4   ///< Dừng khẩn cấp ngay lập tức.
     };
     
-    Type type;
-    float target_x, target_y;
-    float target_angle;
-    std::vector<Point2D> path;
-    float speed;
+    Type type; ///< Loại lệnh điều hướng.
+    float target_x, target_y; ///< Tọa độ x, y của điểm đến.
+    float target_angle; ///< Góc mục tiêu cần xoay đến (radian).
+    std::vector<Point2D> path; ///< Danh sách các điểm tạo thành đường đi.
+    float speed; ///< Tốc độ di chuyển mong muốn (m/s).
     
     std::string toString() const;
     static NavigationCommand fromString(const std::string& data);
@@ -150,7 +158,7 @@ private:
 public:
     CommunicationServer(const std::string& server_ip,
                        int server_port,
-                       int send_interval_ms = 100);
+                       int send_interval_ms = 200);
     ~CommunicationServer();
     
     // Connection management

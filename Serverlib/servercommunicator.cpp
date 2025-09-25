@@ -677,9 +677,9 @@ void CommunicationServer::handleCommand(const std::string& cmd_str) {
     }
     command_cv.notify_one();
     
-    if (command_callback) {
-        command_callback(cmd);
-    }
+    // if (command_callback) {
+    //     command_callback(cmd);
+    // }
     
     LOG_INFO << "[CommServer] Command received: Type=" << cmd.type;
 }
