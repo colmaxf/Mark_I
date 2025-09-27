@@ -2,7 +2,7 @@
 
 # --- Cấu hình ---
 SERVICE_NAME="control_system_agv.service"
-
+REAL_USER=${SUDO_USER:-$(whoami)}
 # --- Bắt đầu Script ---
 
 echo ">> Bắt đầu quá trình cập nhật cho dịch vụ: $SERVICE_NAME"
@@ -20,7 +20,7 @@ else
 fi
 
 echo "copy sang usr/local/bin/control_system"
-sudo cp /home/kautopi/Documents/Mark_I/control_system /usr/local/bin/
+sudo cp /home/$REAL_USER/Documents/Mark_I/control_system /usr/local/bin/
 # Bước 2: Kiểm tra xem 'make' có thành công không
 # Lệnh 'if [ $? -eq 0 ]' kiểm tra mã thoát của lệnh cuối cùng. 0 nghĩa là thành công.
 if [ $? -eq 0 ]; then

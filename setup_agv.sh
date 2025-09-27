@@ -201,23 +201,22 @@ EOF
 
 # 8. Tệp /etc/systemd/system/control_system_agv.service
 echo "--> Tạo tệp /etc/systemd/system/control_system_agv.service..."
-cat > /etc/systemd/system/control_system_agv.service << 'EOF'
+# Lấy user thực tế
+REAL_USER=${SUDO_USER:-$(logname 2>/dev/null || whoami)}
+
+cat > /etc/systemd/system/control_system_agv.service << EOF
 [Unit]
 Description=My C++ Application Service AGV
-# Chỉ cần đợi dịch vụ cuối cùng trong chuỗi DLT và đợi mạng online
-#After=network-online.target dlt-permissions.service
-After= dlt-permissions.service
-# Yêu cầu mạng online và dịch vụ DLT phải chạy thành công
-#Wants=network-online.target
+After=dlt-permissions.service
 Requires=dlt-permissions.service
 
 [Service]
-#ExecStart=/home/kautopi/Documents/Mark_I/control_system
 ExecStart=/usr/local/bin/control_system
-WorkingDirectory=/home/kautopi/Documents/Mark_I
+WorkingDirectory=/home/$REAL_USER/Documents/Mark_I
 StandardOutput=inherit
 StandardError=inherit
 Restart=always
+User=$REAL_USER
 
 [Install]
 WantedBy=multi-user.target
@@ -248,7 +247,7 @@ sudo systemctl enable control_system_agv.service
 echo "--> Khởi động lại các dịch vụ (có thể mất vài giây)..."
 sudo systemctl restart dlt-daemon.service
 sleep 3
-sudosystemctl restart dlt-logger.service
+sudo systemctl restart dlt-logger.service
 sleep 3
 sudo systemctl restart dlt-permissions.service
 sleep 3
