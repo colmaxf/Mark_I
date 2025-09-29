@@ -15,11 +15,11 @@ echo "========================================================="
 
 # Cập nhật package list
 echo "--> Cập nhật package list..."
-apt-get update
+sudo apt-get update
 
 # Cài đặt DLT (Diagnostic Log and Trace)
 echo "--> Cài đặt DLT daemon và development libraries..."
-apt-get install -y libdlt-dev dlt-daemon dlt-tools
+sudo apt-get install -y libdlt-dev dlt-daemon dlt-tools
 
 # Kiểm tra DLT đã cài đặt thành công
 if command -v dlt-daemon >/dev/null 2>&1; then
@@ -32,7 +32,7 @@ fi
 
 # Cài đặt Boost libraries
 echo "--> Cài đặt Boost development libraries..."
-apt-get install -y libboost-all-dev
+sudo apt-get install -y libboost-all-dev
 
 # Kiểm tra Boost đã cài đặt thành công
 if [ -d "/usr/include/boost" ]; then
@@ -44,10 +44,22 @@ else
     exit 1
 fi
 
+#Cài đặt thư viện zlib
+echo "--> Cài đặt thư viện zlib (cần cho DLT)..."
+sudo apt-get install -y zlib1g-dev
+
+# Kiểm tra zlib đã cài đặt thành công
+if dpkg -s zlib1g-dev >/dev/null 2>&1; then
+    echo "✓ zlib đã được cài đặt thành công"
+else
+    echo "✗ Lỗi: zlib không được cài đặt"
+    exit 1
+fi
+
 # Tạo thư mục DLT temp nếu chưa có
 echo "--> Tạo thư mục /tmp/dlt..."
-mkdir -p /tmp/dlt
-chmod 777 /tmp/dlt
+sudo mkdir -p /tmp/dlt
+sudo chmod 777 /tmp/dlt
 
 echo "========================================================="
 echo ">> Kiểm tra các command cần thiết..."

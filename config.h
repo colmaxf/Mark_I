@@ -3,7 +3,7 @@
 
 
 //===================== Cấu hình hệ thống ==================---//
-#define AGV_ID 2
+#define AGV_ID 1
 
 #if AGV_ID == 1
     //Config AGV 1
@@ -30,7 +30,7 @@
     #define LIDAR_CLIENT_PORT 2368
 #endif
 //----------------------Server--------------------------------//
-#define SERVER_IP "100.93.107.119"  // IP của server
+#define SERVER_IP "100.93.107.27"  // IP của server
 #define SERVER_PORT 8080           // Port của server
 #define COMM_SEND_INTERVAL_MS 200 // Gửi status mỗi 200ms
 //----------------------------------------------------//
