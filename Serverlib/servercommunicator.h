@@ -48,7 +48,8 @@ struct AGVStatusPacket {
     bool battery_connected;                 ///< Trạng thái kết nối với hệ thống quản lý pin (BMS).
     float current_speed;                    ///< Tốc độ di chuyển hiện tại của AGV.
     std::map<std::string, uint16_t> plc_registers; ///< Dữ liệu các thanh ghi đọc từ PLC.
-    std::vector<Point2D> lidar_points;      ///< Dữ liệu các điểm quét được từ LiDAR.
+    std::vector<Point2D> stable_lidar_points;    // Dữ liệu chất lượng cao cho Mapping
+    std::vector<Point2D> realtime_lidar_points;  // Dữ liệu liên tục cho Visualization
     long timestamp;                         ///< Dấu thời gian khi gói tin được tạo.
 };
 
@@ -118,7 +119,8 @@ namespace BinaryProtocol {
         bool battery_connected,
         float current_speed,
         const std::map<std::string, uint16_t>& plc_registers,
-        const std::vector<Point2D>& lidar_points,
+        const std::vector<Point2D>& stable_lidar_points,    // Dữ liệu ổn định cho Mapping
+        const std::vector<Point2D>& realtime_lidar_points,  // Dữ liệu realtime cho Visualization
         long timestamp
     );
     

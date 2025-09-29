@@ -63,11 +63,12 @@ std::string buildRealtimePacket(
     bool battery_connected,
     float current_speed,
     const std::map<std::string, uint16_t>& plc_registers,
-    const std::vector<Point2D>& lidar_points,
+    const std::vector<Point2D>& stable_lidar_points,   
+    const std::vector<Point2D>& realtime_lidar_points,
     long timestamp) {
     
     std::vector<uint8_t> payload;
-    payload.reserve(2048); // Dự trữ bộ nhớ để tránh cấp phát lại nhiều lần
+    payload.reserve(4096); // Dự trữ bộ nhớ để tránh cấp phát lại nhiều lần
 
     // --- Đóng gói các trường dữ liệu cơ bản ---
     uint32_t net_id = htonl(id_agv);
@@ -123,19 +124,19 @@ std::string buildRealtimePacket(
         payload.insert(payload.end(), (uint8_t*)&net_val, (uint8_t*)&net_val + 2);
     }
     
-    // --- Đóng gói dữ liệu điểm LiDAR ---
-    uint32_t point_count = lidar_points.size();
-    net_count = htonl(point_count);
-    payload.insert(payload.end(), (uint8_t*)&net_count, (uint8_t*)&net_count + 4);
+    // --- ĐÓNG GÓI STABLE POINTS (CÓ NÉN) ---
+    uint32_t stable_point_count = stable_lidar_points.size();
+    uint32_t net_count_1 = htonl(stable_point_count);
+    payload.insert(payload.end(), (uint8_t*)&net_count_1, (uint8_t*)&net_count_1 + 4);
     
     // Quyết định có nén dữ liệu LiDAR hay không (nếu có nhiều hơn 100 điểm)
-    bool compress_points = point_count > 100; 
+    bool compress_points = stable_point_count > 100; 
     
     if (compress_points) {
-        LOG_INFO << "Compressing " << point_count << " points";
-        std::vector<uint8_t> point_data(point_count * 8);
+        LOG_INFO << "Compressing " << stable_point_count << " points";
+        std::vector<uint8_t> point_data(stable_point_count * 8);
         size_t offset = 0;
-        for (const auto& p : lidar_points) {
+        for (const auto& p : stable_lidar_points) {
             uint32_t net_x = float_to_net(p.x);
             uint32_t net_y = float_to_net(p.y);
             memcpy(point_data.data() + offset, &net_x, 4);
@@ -168,7 +169,7 @@ std::string buildRealtimePacket(
     
     // Nếu không nén, ghi trực tiếp dữ liệu điểm vào payload
     if (!compress_points) {
-        for (const auto& p : lidar_points) {
+        for (const auto& p : stable_lidar_points) {
             uint32_t net_x = float_to_net(p.x);
             uint32_t net_y = float_to_net(p.y);
             payload.insert(payload.end(), (uint8_t*)&net_x, (uint8_t*)&net_x + 4);
@@ -176,6 +177,18 @@ std::string buildRealtimePacket(
         }
     }
     
+    //----- Đóng gói REALTIME POINTS (Luôn là dữ liệu thô) ---
+    uint32_t realtime_point_count = realtime_lidar_points.size();
+    net_count = htonl(realtime_point_count);
+    payload.insert(payload.end(), (uint8_t*)&net_count, (uint8_t*)&net_count + 4);
+
+    for (const auto& p : realtime_lidar_points) {
+        uint32_t net_x = float_to_net(p.x);
+        uint32_t net_y = float_to_net(p.y);
+        payload.insert(payload.end(), (uint8_t*)&net_x, (uint8_t*)&net_x + 4);
+        payload.insert(payload.end(), (uint8_t*)&net_y, (uint8_t*)&net_y + 4);
+    }
+
     // --- Xây dựng header của gói tin ---
     PacketHeader header;
     header.magic = htons(MAGIC_NUMBER); // Số magic để xác thực
@@ -374,14 +387,16 @@ void CommunicationServer::sendStatus(const AGVStatusPacket& status) {
         status.battery_connected,
         status.current_speed,
         status.plc_registers,
-        status.lidar_points,
+        status.stable_lidar_points,    // Dữ liệu stable
+        status.realtime_lidar_points,  // Dữ liệu realtime       
         status.timestamp
     );
     
     // Gửi gói tin với tiền tố là độ dài gói tin (4 bytes)
     uint32_t size = htonl(packet.size());
     LOG_INFO << "[SERSEND] Sending packet size: " << packet.size() 
-             << ", LiDAR points: " << status.lidar_points.size();
+             << ", Stable points: " << status.stable_lidar_points.size()
+             << ", Realtime points: " << status.realtime_lidar_points.size();
     std::lock_guard<std::mutex> lock(connection_mutex);
     if (send(socket_fd, &size, 4, MSG_NOSIGNAL) == 4) {
         if (send(socket_fd, packet.data(), packet.size(), MSG_NOSIGNAL) == static_cast<ssize_t>(packet.size())) {
@@ -785,39 +800,42 @@ void CommunicationServer::sendThread() {
     auto last_heartbeat_time = std::chrono::steady_clock::now();
     
     while (is_running) {
-        // Luồng ngủ một khoảng ngắn để tránh lãng phí CPU khi không có việc gì làm.
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        try { // <<< BẮT ĐẦU KHỐI TRY ĐỂ BẮT LỖI
+            
+            // Luồng ngủ một khoảng ngắn để tránh lãng phí CPU
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-        // Nếu không kết nối, bỏ qua vòng lặp này.
-        if (!is_connected) {
-            continue;
-        }
-        
-        auto now = std::chrono::steady_clock::now();
-        
-        // === GỬI TRẠNG THÁI ĐỊNH KỲ ===
-        // Gửi trạng thái định kỳ
-        if (status_callback && std::chrono::duration_cast<std::chrono::milliseconds>(now - last_status_time).count() >= send_interval_ms) {
-            try {
-                // 1. Gọi callback để lấy dữ liệu trạng thái. Thao tác này có thể tốn thời gian.
+            if (!is_connected) {
+                continue;
+            }
+            
+            auto now = std::chrono::steady_clock::now();
+            
+            // Gửi trạng thái định kỳ
+            if (status_callback && std::chrono::duration_cast<std::chrono::milliseconds>(now - last_status_time).count() >= send_interval_ms) {
                 AGVStatusPacket status = status_callback();
-                // 2. Gửi dữ liệu đi. Thao tác này có thể bị block.
                 sendStatus(status);
                 last_status_time = now;
-            } catch (const std::exception& e) {
-                LOG_ERROR << "[CommServer] Exception in status callback: " << e.what();
             }
-        }
-        
-        // === GỬI HEARTBEAT ĐỊNH KỲ ===
-        // Gửi heartbeat định kỳ
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_heartbeat_time).count() >= heartbeat_interval_ms) {
-            sendHeartbeat();
-            last_heartbeat_time = now;
-        }
+            
+            // Gửi heartbeat định kỳ
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_heartbeat_time).count() >= heartbeat_interval_ms) {
+                sendHeartbeat();
+                last_heartbeat_time = now;
+            }
 
-        // Cập nhật thời gian gửi cuối cùng, dùng cho việc kiểm tra timeout.
-        last_send_time = now;
+            last_send_time = now;
+
+        } catch (const std::exception& e) {
+            // <<< NẾU CÓ LỖI, NÓ SẼ ĐƯỢC BẮT VÀ GHI LOG TẠI ĐÂY
+            LOG_ERROR << "[CommServer] Exception in sendThread: " << e.what() << ". Thread will continue.";
+            // Ngủ một chút để tránh lặp lại lỗi quá nhanh
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        } catch (...) {
+            // <<< Bắt cả các lỗi không xác định
+            LOG_ERROR << "[CommServer] Unknown exception in sendThread. Thread will continue.";
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
     }
     
     LOG_INFO << "[CommServer] Send thread stopped.";

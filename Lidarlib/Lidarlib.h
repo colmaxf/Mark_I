@@ -104,7 +104,7 @@ private:
     mutable std::mutex stabilizer_mutex;
     
 public:
-    RealtimeStabilizer(int window = 5, float stab_thresh = 0.02f, float outlier_thresh = 0.1f)
+    RealtimeStabilizer(int window = 5, float stab_thresh = 0.5f, float outlier_thresh = 0.1f)
         : history_window(window), stability_threshold(stab_thresh), 
           outlier_threshold(outlier_thresh), is_stable(false), stable_frame_count(0) {}
     
@@ -261,7 +261,7 @@ struct LidarConfig {
     // Processing settings
     int buffer_size = 100;
     int stabilizer_window = 5;
-    float stability_threshold = 0.02f;
+    float stability_threshold = 0.5f;//0.02f;
     float outlier_threshold = 0.1f;
     
     // Filter settings

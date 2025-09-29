@@ -144,6 +144,8 @@ private:
 
     /// @brief Hàng đợi không khóa (lock-free) để truyền các điểm LiDAR ổn định từ luồng LiDAR đến luồng server.
     boost::lockfree::spsc_queue<std::vector<Point2D>, boost::lockfree::capacity<128>> stable_points_queue_;
+    /// @brief Hàng đợi không khóa (lock-free) để truyền các điểm LiDAR thời gian thực từ luồng LiDAR đến luồng server.
+    boost::lockfree::spsc_queue<std::vector<Point2D>, boost::lockfree::capacity<128>> realtime_points_queue_;
     /// @brief Hàng đợi không khóa để gửi lệnh từ các luồng khác đến luồng PLC.
     boost::lockfree::spsc_queue<std::string, boost::lockfree::capacity<512>> plc_command_queue_;
     /// @brief Hàng đợi không khóa để nhận kết quả từ luồng PLC.

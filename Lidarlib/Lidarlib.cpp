@@ -255,17 +255,29 @@ bool RealtimeStabilizer::update(const vector<LidarPoint>& new_points) {
     vector<LidarPoint> candidate_stable = computeStabilizedPoints();
     
     // Kiểm tra xem tập hợp ứng viên có ổn định so với tập hợp ổn định trước đó không.
-    if (checkStability(candidate_stable)) {
+   if (checkStability(candidate_stable)) {
         stable_frame_count++;
-        // Dữ liệu được coi là ổn định nếu nó ổn định trong 3 frame liên tiếp.
-        if (stable_frame_count >= 3) {
-            stable_points = candidate_stable;
-            is_stable = true;
-            return true;
-        }
+
+        // // Dữ liệu được coi là ổn định nếu nó ổn định trong 3 frame liên tiếp.
+        // if (stable_frame_count >= 3) {
+        //     stable_points = candidate_stable;
+        //     is_stable = true;
+        //     return true;
+        // }
+        
+        // Cập nhật "ảnh tham chiếu" ngay khi có một frame "trông có vẻ" ổn định.
+        // Đây là thay đổi quan trọng nhất.
+        stable_points = candidate_stable; 
+        
     } else {
         stable_frame_count = 0;
+        // Nếu không ổn định, ngay lập tức tắt cờ is_stable
         is_stable = false;
+    }
+    
+    // Chỉ bật cờ is_stable sau khi ổn định 3 lần liên tiếp
+    if (stable_frame_count >= 1) {
+        is_stable = true;
     }
     
     return false;
@@ -417,7 +429,19 @@ vector<LidarPoint> RealtimeStabilizer::computeStabilizedPoints() {
  */
 bool RealtimeStabilizer::checkStability(const vector<LidarPoint>& new_points) {
     if (stable_points.empty()) return true;
-    if (new_points.size() != stable_points.size()) return false;
+    // if (new_points.size() != stable_points.size()) return false;
+    // Cho phép số lượng điểm chênh lệch một chút (ví dụ: 10%)
+    // thay vì yêu cầu phải bằng nhau tuyệt đối.
+    float size_diff_ratio = 0.0f;
+    if (stable_points.size() > 0) {
+        size_diff_ratio = static_cast<float>(abs(static_cast<int>(new_points.size()) - static_cast<int>(stable_points.size()))) / stable_points.size();
+    }
+
+    if (size_diff_ratio > 0.10f) { // Nếu số điểm thay đổi hơn 10%, coi như không ổn định
+        LOG_DEBUG << "[LIDAR-RT][Stability Check] Failed due to size difference: " 
+                  << new_points.size() << " vs " << stable_points.size();
+        return false;
+    }
     
     float total_deviation = 0.0f;
     int valid_comparisons = 0;
@@ -440,7 +464,13 @@ bool RealtimeStabilizer::checkStability(const vector<LidarPoint>& new_points) {
     float avg_deviation = total_deviation / valid_comparisons;
     
     // So sánh với ngưỡng ổn định.
-    return avg_deviation < stability_threshold;
+    bool is_dev_stable = avg_deviation < stability_threshold;
+    if (!is_dev_stable) {
+        LOG_INFO << "[LIDAR-RT][Stability Check] Failed due to deviation: " << avg_deviation 
+                  << " (threshold: " << stability_threshold << ")";
+    }
+
+    return is_dev_stable;
 }
 
 // === LidarProcessor Implementation ===
@@ -652,7 +682,8 @@ void LidarProcessor::processLidarData() {
             }
             
             // Stable points callback khi dữ liệu vừa ổn định
-            if (stable_points_callback && became_stable) {
+            // if (stable_points_callback && became_stable) {
+            if (stable_points_callback && stabilizer->isDataStable()) {
                 stable_points_callback(stabilizer->getStablePoints());
             }
         }
