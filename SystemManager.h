@@ -45,7 +45,7 @@ struct SystemState {
     bool plc_connected = false; ///< Trạng thái kết nối với PLC.
     std::string last_plc_status = "Chưa có dữ liệu PLC"; ///< Trạng thái hoặc phản hồi cuối cùng từ PLC.
 
-    // Dữ liệu Server
+    // Dữ liệu Server - connect
     bool server_connected = false; ///< Trạng thái kết nối với server trung tâm.
 
     // Dữ liệu LiDAR
