@@ -382,7 +382,7 @@ void CommunicationServer::sendStatus(const AGVStatusPacket& status) {
     if (send(socket_fd, &size, 4, MSG_NOSIGNAL) == 4) {
         if (send(socket_fd, packet.data(), packet.size(), MSG_NOSIGNAL) == static_cast<ssize_t>(packet.size())) {
             // Gửi PING ngay sau khi gửi gói trạng thái thành công để đo độ trễ
-            sendPing();
+            //sendPing();
             total_packets_sent++;
             total_bytes_sent += packet.size() + 4;
             LOG_INFO << "[SERSEND] Successfully sent packet #" << total_packets_sent;
@@ -818,7 +818,8 @@ void CommunicationServer::sendThread() {
     
     auto last_status_time = std::chrono::steady_clock::now();
     auto last_heartbeat_time = std::chrono::steady_clock::now();
-    
+    auto last_ping_time = std::chrono::steady_clock::now();
+
     while (is_running) {
         try { // <<< BẮT ĐẦU KHỐI TRY ĐỂ BẮT LỖI
             
@@ -842,6 +843,11 @@ void CommunicationServer::sendThread() {
             if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_heartbeat_time).count() >= heartbeat_interval_ms) {
                 sendHeartbeat();
                 last_heartbeat_time = now;
+            }
+
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_ping_time).count() >= 1000) {
+                sendPing(); // Gửi độc lập
+                last_ping_time = now;
             }
 
             last_send_time = now;

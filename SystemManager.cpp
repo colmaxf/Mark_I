@@ -126,11 +126,20 @@ bool SystemManager::initialize() {
         // }
 
         // Lấy dữ liệu LiDAR realtime cho visualization (nhiều điểm, cập nhật liên tục)
-        std::vector<Point2D> realtime_points;
+        std::vector<ServerComm::Point2D> realtime_points;
         if (realtime_points_queue_.pop(realtime_points)) {
             // Giới hạn số điểm realtime để không quá tải
             // const size_t MAX_REALTIME_POINTS = 1000;
             status.realtime_lidar_points.clear();
+
+            // Thay vì gửi đi trực tiếp, chúng ta gọi hàm sampling để giảm số lượng điểm
+            std::vector<ServerComm::Point2D> sampled_points = sampleImportantPoints(realtime_points);
+
+            // Gán các điểm đã được sampling vào gói tin
+            status.realtime_lidar_points = std::move(sampled_points);
+            // for (const auto& p : sampled_points) {
+            //      status.realtime_lidar_points.push_back({p.x, p.y});
+            // }
             // if (realtime_points.size() > MAX_REALTIME_POINTS) {
             //     // Lấy mẫu đều để giảm số điểm
             //     size_t step = realtime_points.size() / MAX_REALTIME_POINTS;
@@ -141,9 +150,9 @@ bool SystemManager::initialize() {
             //         });
             //     }
             // } else {
-                for (const auto& p : realtime_points) {
-                    status.realtime_lidar_points.push_back({p.x, p.y});
-                }
+                // for (const auto& p : realtime_points) {
+                //     status.realtime_lidar_points.push_back({p.x, p.y});
+                // }
                 LOG_INFO << "[SystemManager] Sending " << status.realtime_lidar_points.size() 
                          << " realtime points for mapping";
             // }
@@ -509,7 +518,7 @@ void SystemManager::lidar_thread_func() {
         LOG_INFO         << "[LIDAR Thread] Processed frame. Points: " << points.size();
         {
             // Đóng gói dữ liệu điểm để gửi đi
-            std::vector<Point2D> points_to_send;
+            std::vector<ServerComm::Point2D> points_to_send;
             points_to_send.reserve(points.size());
             for (const auto& p : points) {
                 points_to_send.push_back({p.x, p.y});
@@ -781,6 +790,42 @@ void SystemManager::battery_thread_func() {
     LOG_INFO << "[Battery Thread] Stopped.";
 }
 
+/**
+ * @brief Lấy mẫu các điểm quan trọng từ tập hợp điểm LiDAR.
+ * @details Hàm này được sử dụng để giảm số lượng điểm LiDAR gửi lên server,
+ * chỉ giữ lại những điểm quan trọng để giảm tải băng thông mà vẫn đảm bảo
+ * đủ thông tin cho việc hiển thị hoặc xử lý.
+ * @param points Vector chứa tất cả các điểm LiDAR.
+ * @return Vector chứa các điểm LiDAR đã được lấy mẫu.
+ */
+std::vector<ServerComm::Point2D> SystemManager::sampleImportantPoints(const std::vector<ServerComm::Point2D>& points) {
+    if (points.empty()) {
+        return {};
+    }
+
+   std::vector<ServerComm::Point2D> result;
+    // Dành trước bộ nhớ để tăng hiệu năng, tránh cấp phát lại nhiều lần
+    result.reserve(points.size() / 2); // Ước tính kích thước sau khi sampling
+
+    // Duyệt qua tất cả các điểm đầu vào
+    for (const auto& p : points) {
+        // Tính khoảng cách từ điểm đến tâm (vị trí của LiDAR)
+        float dist = sqrt(p.x * p.x + p.y * p.y);
+
+        if (dist < 2.0f) {
+            // Giữ lại 100% các điểm ở khoảng cách dưới 2 mét
+            result.push_back(p);
+        } else if (dist < 5.0f && (rand() % 2 == 0)) {
+            // Giữ lại ngẫu nhiên 50% các điểm ở khoảng cách từ 2 đến 5 mét
+            result.push_back(p);
+        } else if (rand() % 4 == 0) {
+            // Giữ lại ngẫu nhiên 25% các điểm ở khoảng cách xa hơn 5 mét
+            result.push_back(p);
+        }
+    }
+
+    return result;
+}
 // Lưu ý: Luồng server_communication_thread không còn được quản lý trực tiếp ở đây.
 // Nó được quản lý bên trong lớp ServerComm::CommunicationServer,
 // vốn sử dụng các luồng riêng (`std::thread`) để xử lý I/O mạng một cách bất đồng bộ.

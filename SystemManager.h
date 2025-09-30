@@ -23,10 +23,10 @@
  * @brief Cấu trúc dữ liệu đơn giản cho một điểm trong không gian 2D.
  * Thường được sử dụng để biểu diễn dữ liệu từ cảm biến LiDAR.
  */
-struct Point2D {
-    float x; ///< Tọa độ X của điểm.
-    float y; ///< Tọa độ Y của điểm.
-};
+// struct Point2D {
+//     float x; ///< Tọa độ X của điểm.
+//     float y; ///< Tọa độ Y của điểm.
+// };
 
 /**
  * @struct SystemState
@@ -51,7 +51,7 @@ struct SystemState {
     // Dữ liệu LiDAR
     std::string last_lidar_data = "Chưa có dữ liệu Lidar"; ///< Chuỗi trạng thái cuối cùng từ LiDAR.
     bool lidar_connected = false; ///< Trạng thái kết nối của LiDAR.
-    std::vector<Point2D> latest_convex_hull; ///< Tập hợp các điểm ổn định gần nhất từ LiDAR.
+    std::vector<ServerComm::Point2D> latest_convex_hull; ///< Tập hợp các điểm ổn định gần nhất từ LiDAR.
     int total_stable_hulls = 0; ///< Tổng số lần dữ liệu LiDAR được xác định là ổn định.
 
     // Dữ liệu an toàn
@@ -143,9 +143,9 @@ private:
     std::unique_ptr<ServerComm::CommunicationServer> comm_server_; ///< Con trỏ duy nhất đến đối tượng giao tiếp server.
 
     /// @brief Hàng đợi không khóa (lock-free) để truyền các điểm LiDAR ổn định từ luồng LiDAR đến luồng server.
-    boost::lockfree::spsc_queue<std::vector<Point2D>, boost::lockfree::capacity<128>> stable_points_queue_;
+    boost::lockfree::spsc_queue<std::vector<ServerComm::Point2D>, boost::lockfree::capacity<128>> stable_points_queue_;
     /// @brief Hàng đợi không khóa (lock-free) để truyền các điểm LiDAR thời gian thực từ luồng LiDAR đến luồng server.
-    boost::lockfree::spsc_queue<std::vector<Point2D>, boost::lockfree::capacity<128>> realtime_points_queue_;
+    boost::lockfree::spsc_queue<std::vector<ServerComm::Point2D>, boost::lockfree::capacity<128>> realtime_points_queue_;
     /// @brief Hàng đợi không khóa để gửi lệnh từ các luồng khác đến luồng PLC.
     boost::lockfree::spsc_queue<std::string, boost::lockfree::capacity<512>> plc_command_queue_;
     /// @brief Hàng đợi không khóa để nhận kết quả từ luồng PLC.
@@ -160,6 +160,7 @@ private:
     std::atomic<bool> system_initialized_{false}; ///< Cờ đảm bảo hệ thống chỉ được khởi tạo một lần.
 
     std::vector<std::thread> threads_; ///< Vector chứa tất cả các luồng đang chạy của hệ thống.
+    std::vector<ServerComm::Point2D> sampleImportantPoints(const std::vector<ServerComm::Point2D>& points); ///< Lấy mẫu các điểm quan trọng từ tập hợp điểm LiDAR.
 };
 
 #endif // SYSTEM_MANAGER_H
