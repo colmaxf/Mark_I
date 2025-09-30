@@ -24,7 +24,7 @@
 #include <unordered_map>
 #include <chrono>
 
-#include "../config.h"
+#include "../config/config.h"
 #include "../logger/Logger.h"
 #include <mutex>
 

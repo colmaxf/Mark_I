@@ -85,6 +85,10 @@ bool SystemManager::initialize() {
             status.is_safe = state_.is_safe_to_move;
             status.plc_connected = state_.plc_connected;
             status.lidar_connected = state_.lidar_connected;
+            // Lấy dữ liệu pose và visualization từ hàng đợi
+            pose_and_vis_queue_.pop(status.robot_pose); // Lấy pose
+            vis_points_queue_.pop(status.visualization_points); // Lấy các điểm visualization
+
             status.battery_connected = state_.battery_connected;
             status.current_speed = static_cast<float>(state_.current_speed);
         }
@@ -513,14 +517,55 @@ void SystemManager::lidar_thread_func() {
         state_.lidar_connected = true;
     }
 
+    // Khởi tạo Cartographer
+    auto cartographer = std::make_unique<CartographerStandalone>();
+    if (!cartographer->Initialize("./config", "agv_config.lua")) {
+        LOG_ERROR << "[LiDAR Thread] Failed to initialize Cartographer";
+        return;
+    }
+
     // Callback xử lý dữ liệu thời gian thực để phát hiện vật cản và điều khiển tốc độ.
-    lidar_processor->setRealtimeCallback([this](const std::vector<LidarPoint>& points) {
+    lidar_processor->setRealtimeCallback([this, &cartographer](const std::vector<LidarPoint>& points) {
         LOG_INFO         << "[LIDAR Thread] Processed frame. Points: " << points.size();
         {
-            // Đóng gói dữ liệu điểm để gửi đi
-            std::vector<ServerComm::Point2D> points_to_send;
-            points_to_send.reserve(points.size());
-            for (const auto& p : points) {
+                // 1. Feed data to Cartographer
+                cartographer->AddSensorData(points);
+                
+                // 2. Get current pose
+                ServerComm::AGVPose pose = cartographer->GetCurrentPose();
+                
+                // 3. Pack minimal data for server
+                // ServerComm::AGVStatusPacket status;
+                // status.robot_pose = {pose.x, pose.y, pose.theta, pose.confidence};
+                
+                // 4. Sample 50 points for visualization
+                std::vector<ServerComm::Point2D> vis_points;
+                size_t step = std::max(size_t(1), points.size() / 50);
+                for (size_t i = 0; i < points.size(); i += step) {
+                    vis_points.push_back({points[i].x, points[i].y});
+                    if (vis_points.size() >= 50) break;
+                }
+
+                // 5. Đẩy dữ liệu pose và visualization vào hàng đợi để luồng server gửi đi
+                pose_and_vis_queue_.push(pose);
+                vis_points_queue_.push(vis_points);
+                
+                // 6. Get map update every 5 seconds
+                static auto last_map_time = std::chrono::steady_clock::now();
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::seconds>(
+                    now - last_map_time).count() >= 5) {
+                    auto map = cartographer->GetOccupancyGrid();
+                    // Compress and send map delta...
+                    last_map_time = now;
+                }
+        } 
+
+        {
+        // Đóng gói dữ liệu điểm để gửi đi
+        std::vector<ServerComm::Point2D> points_to_send;
+        points_to_send.reserve(points.size());
+        for (const auto& p : points) {
                 points_to_send.push_back({p.x, p.y});
             }
             // Đẩy vào hàng đợi thời gian thực

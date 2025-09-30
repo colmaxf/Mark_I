@@ -188,6 +188,7 @@ cat > /etc/systemd/system/dlt-permissions.service << 'EOF'
 [Unit]
 Description=Setup DLT Permissions
 After=dlt-logger.service
+Requires=dlt-logger.service
 
 [Service]
 Type=oneshot
@@ -268,4 +269,3 @@ sudo systemctl status control_system_agv.service --no-pager
 echo "===================================================="
 echo ">> Quá trình cài đặt đã hoàn tất!"
 echo "Sử dụng 'dlt-view-logs.sh' để xem các lệnh kiểm tra log."
-

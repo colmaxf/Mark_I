@@ -11,12 +11,13 @@
 #include <chrono>
 #include <boost/lockfree/spsc_queue.hpp>
 
-#include "config.h"
+#include "config/config.h"
 #include "logger/Logger.h"
 #include "MCprotocollib/MCprotocol.h"
 #include "Lidarlib/Lidarlib.h"
 #include "Serverlib/servercommunicator.h"
 #include "Batterylib/BatteryJBD.h"
+#include "Lidarlib/cartographer_standalone.h"
 
 /**
  * @struct Point2D
@@ -148,6 +149,10 @@ private:
     boost::lockfree::spsc_queue<std::vector<ServerComm::Point2D>, boost::lockfree::capacity<128>> realtime_points_queue_;
     /// @brief Hàng đợi không khóa để gửi lệnh từ các luồng khác đến luồng PLC.
     boost::lockfree::spsc_queue<std::string, boost::lockfree::capacity<512>> plc_command_queue_;
+    /// @brief Hàng đợi không khóa để truyền dữ liệu pose và visualization từ luồng LiDAR đến luồng server.
+    boost::lockfree::spsc_queue<ServerComm::AGVPose, boost::lockfree::capacity<128>> pose_and_vis_queue_;
+    /// @brief Hàng đợi không khóa để truyền các điểm LiDAR được lấy mẫu để hiển thị.
+    boost::lockfree::spsc_queue<std::vector<ServerComm::Point2D>, boost::lockfree::capacity<128>> vis_points_queue_;
     /// @brief Hàng đợi không khóa để nhận kết quả từ luồng PLC.
     boost::lockfree::spsc_queue<std::string, boost::lockfree::capacity<512>> plc_result_queue_;
 

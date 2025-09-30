@@ -15,7 +15,7 @@
 #include <endian.h>  // For htobe64, etc.
 #include <thread>
 
-#include "../config.h"
+#include "../config/config.h"
 #include "../logger/Logger.h"
 
 /**
@@ -35,6 +35,18 @@ struct Point2D {
 };
 
 /**
+ * @struct AGVPose
+ * @brief Đại diện cho vị trí và hướng của AGV.
+ */
+struct AGVPose {
+    float x = 0.0f;
+    float y = 0.0f;
+    float theta = 0.0f;
+    float confidence = 0.0f;
+    long timestamp_us = 0;
+};
+
+/**
  * @struct AGVStatusPacket
  * @brief Tập hợp tất cả dữ liệu trạng thái của AGV để gửi đến server trong một gói tin.
  */
@@ -48,6 +60,8 @@ struct AGVStatusPacket {
     bool battery_connected;                 ///< Trạng thái kết nối với hệ thống quản lý pin (BMS).
     float current_speed;                    ///< Tốc độ di chuyển hiện tại của AGV.
     std::map<std::string, uint16_t> plc_registers; ///< Dữ liệu các thanh ghi đọc từ PLC.
+    AGVPose robot_pose;                     ///< Vị trí và hướng của robot từ Cartographer.
+    std::vector<Point2D> visualization_points; ///< Các điểm LiDAR được lấy mẫu để hiển thị.
     // std::vector<Point2D> stable_lidar_points;    // Dữ liệu chất lượng cao cho Mapping
     std::vector<Point2D> realtime_lidar_points;  // Dữ liệu liên tục cho Visualization
     long timestamp;                         ///< Dấu thời gian khi gói tin được tạo.
