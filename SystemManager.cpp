@@ -114,37 +114,39 @@ bool SystemManager::initialize() {
 
         // Lấy dữ liệu điểm LiDAR ổn định từ hàng đợi (nếu có).
         // Lấy dữ liệu LiDAR ổn định cho mapping (chất lượng cao, ít điểm)
-        std::vector<Point2D> stable_points;
-        if (stable_points_queue_.pop(stable_points)) {
-            status.stable_lidar_points.clear();
-            status.stable_lidar_points.reserve(stable_points.size());
-            for (const auto& p : stable_points) {
-                status.stable_lidar_points.push_back({p.x, p.y});
-            }
-            LOG_INFO << "[SystemManager] Sending " << status.stable_lidar_points.size() 
-                     << " stable points for mapping";
-        }
+        // std::vector<Point2D> stable_points;
+        // if (stable_points_queue_.pop(stable_points)) {
+        //     status.stable_lidar_points.clear();
+        //     status.stable_lidar_points.reserve(stable_points.size());
+        //     for (const auto& p : stable_points) {
+        //         status.stable_lidar_points.push_back({p.x, p.y});
+        //     }
+        //     LOG_INFO << "[SystemManager] Sending " << status.stable_lidar_points.size() 
+        //              << " stable points for mapping";
+        // }
 
         // Lấy dữ liệu LiDAR realtime cho visualization (nhiều điểm, cập nhật liên tục)
         std::vector<Point2D> realtime_points;
         if (realtime_points_queue_.pop(realtime_points)) {
             // Giới hạn số điểm realtime để không quá tải
-            const size_t MAX_REALTIME_POINTS = 1000;
+            // const size_t MAX_REALTIME_POINTS = 1000;
             status.realtime_lidar_points.clear();
-            if (realtime_points.size() > MAX_REALTIME_POINTS) {
-                // Lấy mẫu đều để giảm số điểm
-                size_t step = realtime_points.size() / MAX_REALTIME_POINTS;
-                for (size_t i = 0; i < realtime_points.size(); i += step) {
-                    status.realtime_lidar_points.push_back({
-                        realtime_points[i].x, 
-                        realtime_points[i].y
-                    });
-                }
-            } else {
+            // if (realtime_points.size() > MAX_REALTIME_POINTS) {
+            //     // Lấy mẫu đều để giảm số điểm
+            //     size_t step = realtime_points.size() / MAX_REALTIME_POINTS;
+            //     for (size_t i = 0; i < realtime_points.size(); i += step) {
+            //         status.realtime_lidar_points.push_back({
+            //             realtime_points[i].x, 
+            //             realtime_points[i].y
+            //         });
+            //     }
+            // } else {
                 for (const auto& p : realtime_points) {
                     status.realtime_lidar_points.push_back({p.x, p.y});
                 }
-            }
+                LOG_INFO << "[SystemManager] Sending " << status.realtime_lidar_points.size() 
+                         << " realtime points for mapping";
+            // }
         }
         // Gán dấu thời gian hiện tại cho gói tin.
         status.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -165,7 +167,8 @@ bool SystemManager::initialize() {
         for (const auto& reg : status.plc_registers) {
             log_ss << reg.first << ":" << reg.second << ",";
         }
-        log_ss << "}, lidar_points=" << status.stable_lidar_points.size() << "/" << status.realtime_lidar_points.size()
+        log_ss << "}, lidar_points=" /*<< status.stable_lidar_points.size() << "/"*/
+               << status.realtime_lidar_points.size()
                << ", timestamp=" << status.timestamp;
         LOG_INFO << log_ss.str();
         // --- END LOG ---
@@ -559,23 +562,23 @@ void SystemManager::lidar_thread_func() {
         }
     });
 
-    // Callback xử lý dữ liệu ổn định để gửi lên server.
-    lidar_processor->setStablePointsCallback([this](const std::vector<LidarPoint>& stable_points) {
+    // // Callback xử lý dữ liệu ổn định để gửi lên server.
+    // lidar_processor->setStablePointsCallback([this](const std::vector<LidarPoint>& stable_points) {
 
-        if (stable_points.empty()) {
-            LOG_WARNING << "[LiDAR Thread][STABLEPOINTSCALLBACK] No stable points received.";
-            return;
-        }
-        std::vector<Point2D> stable_2d;
-        stable_2d.reserve(stable_points.size());
-        LOG_INFO << "[LiDAR Thread][STABLEPOINTSCALLBACK] Stable points received. Size: " << stable_points.size();
-        for (const auto& p : stable_points) {
-            stable_2d.push_back({p.x, p.y});
-        }
-        // Đẩy vào hàng đợi không khóa để luồng server xử lý.
-        stable_points_queue_.push(std::move(stable_2d));
-        LOG_INFO << "[LiDAR Thread] Stable points pushed to queue. Size: " << stable_2d.size();
-    });
+    //     if (stable_points.empty()) {
+    //         LOG_WARNING << "[LiDAR Thread][STABLEPOINTSCALLBACK] No stable points received.";
+    //         return;
+    //     }
+    //     std::vector<Point2D> stable_2d;
+    //     stable_2d.reserve(stable_points.size());
+    //     LOG_INFO << "[LiDAR Thread][STABLEPOINTSCALLBACK] Stable points received. Size: " << stable_points.size();
+    //     for (const auto& p : stable_points) {
+    //         stable_2d.push_back({p.x, p.y});
+    //     }
+    //     // Đẩy vào hàng đợi không khóa để luồng server xử lý.
+    //     stable_points_queue_.push(std::move(stable_2d));
+    //     LOG_INFO << "[LiDAR Thread] Stable points pushed to queue. Size: " << stable_2d.size();
+    // });
 
     LOG_INFO << "[LiDAR Thread] Entering main loop.";
     while (running_) {

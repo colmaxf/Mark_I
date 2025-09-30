@@ -48,7 +48,7 @@ struct AGVStatusPacket {
     bool battery_connected;                 ///< Trạng thái kết nối với hệ thống quản lý pin (BMS).
     float current_speed;                    ///< Tốc độ di chuyển hiện tại của AGV.
     std::map<std::string, uint16_t> plc_registers; ///< Dữ liệu các thanh ghi đọc từ PLC.
-    std::vector<Point2D> stable_lidar_points;    // Dữ liệu chất lượng cao cho Mapping
+    // std::vector<Point2D> stable_lidar_points;    // Dữ liệu chất lượng cao cho Mapping
     std::vector<Point2D> realtime_lidar_points;  // Dữ liệu liên tục cho Visualization
     long timestamp;                         ///< Dấu thời gian khi gói tin được tạo.
 };
@@ -91,7 +91,9 @@ namespace BinaryProtocol {
         REALTIME_STATUS   = 0x01, ///< Gói tin chứa trạng thái thời gian thực của AGV.
         NAVIGATION_COMMAND= 0x02, ///< Gói tin chứa lệnh điều hướng từ server.
         HEARTBEAT         = 0x05, ///< Gói tin heartbeat để duy trì và kiểm tra kết nối.
-        HEARTBEAT_ACK     = 0x06  ///< Gói tin xác nhận heartbeat từ server.
+        HEARTBEAT_ACK     = 0x06,  ///< Gói tin xác nhận heartbeat từ server.
+        PING              = 0x07, ///< Gói tin PING để đo độ trễ.
+        PONG              = 0x08  ///< Gói tin PONG trả lời cho PING.
     };
     
     /**
@@ -119,7 +121,7 @@ namespace BinaryProtocol {
         bool battery_connected,
         float current_speed,
         const std::map<std::string, uint16_t>& plc_registers,
-        const std::vector<Point2D>& stable_lidar_points,    // Dữ liệu ổn định cho Mapping
+        //const std::vector<Point2D>& stable_lidar_points,    // Dữ liệu ổn định cho Mapping
         const std::vector<Point2D>& realtime_lidar_points,  // Dữ liệu realtime cho Visualization
         long timestamp
     );
@@ -134,6 +136,8 @@ namespace BinaryProtocol {
     
     std::string buildHeartbeatPacket(int agv_id);
     
+    std::string buildPacket(uint8_t type, uint8_t flags, const std::vector<uint8_t>& payload);
+
     bool parsePacketHeader(const uint8_t* data, PacketHeader& header);
 
     bool parseNavigationCommand(const std::string& data, 
@@ -178,6 +182,7 @@ public:
     void sendStatus(const AGVStatusPacket& status);
     void sendEmergencyStop();
     void sendHeartbeat();
+    void sendPing();
 
     // --- Callbacks Setup ---
     void setStatusCallback(StatusCallback callback);

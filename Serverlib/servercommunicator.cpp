@@ -48,6 +48,27 @@ uint32_t calculateCRC32(const uint8_t* data, size_t length) {
 }
 
 /**
+ * @brief Xây dựng một gói tin nhị phân chung từ các thành phần.
+ * @param type Loại gói tin (xem PacketType).
+ * @param flags Các cờ (ví dụ: FLAG_COMPRESSED).
+ * @param payload Dữ liệu của gói tin.
+ * @return Chuỗi string chứa gói tin nhị phân hoàn chỉnh.
+ */
+std::string buildPacket(uint8_t type, uint8_t flags, const std::vector<uint8_t>& payload) {
+    PacketHeader header;
+    header.magic = htons(MAGIC_NUMBER);
+    header.type = type;
+    header.flags = flags;
+    header.length = htonl(payload.size());
+    header.checksum = htonl(calculateCRC32(payload.data(), payload.size()));
+
+    std::string packet(sizeof(PacketHeader) + payload.size(), 0);
+    memcpy(&packet[0], &header, sizeof(PacketHeader));
+    memcpy(&packet[sizeof(PacketHeader)], payload.data(), payload.size());
+    return packet;
+}
+
+/**
  * @brief Xây dựng gói tin trạng thái thời gian thực (Realtime Status).
  * Gói tin này chứa toàn bộ thông tin trạng thái của AGV để gửi lên server.
  * @details Gói tin được xây dựng theo giao thức nhị phân tự định nghĩa để tối ưu băng thông.
@@ -63,7 +84,7 @@ std::string buildRealtimePacket(
     bool battery_connected,
     float current_speed,
     const std::map<std::string, uint16_t>& plc_registers,
-    const std::vector<Point2D>& stable_lidar_points,   
+    // const std::vector<Point2D>& stable_lidar_points,   
     const std::vector<Point2D>& realtime_lidar_points,
     long timestamp) {
     
@@ -124,58 +145,58 @@ std::string buildRealtimePacket(
         payload.insert(payload.end(), (uint8_t*)&net_val, (uint8_t*)&net_val + 2);
     }
     
-    // --- ĐÓNG GÓI STABLE POINTS (CÓ NÉN) ---
-    uint32_t stable_point_count = stable_lidar_points.size();
-    uint32_t net_count_1 = htonl(stable_point_count);
-    payload.insert(payload.end(), (uint8_t*)&net_count_1, (uint8_t*)&net_count_1 + 4);
+    // // --- ĐÓNG GÓI STABLE POINTS (CÓ NÉN) ---
+    // uint32_t stable_point_count = stable_lidar_points.size();
+    // uint32_t net_count_1 = htonl(stable_point_count);
+    // payload.insert(payload.end(), (uint8_t*)&net_count_1, (uint8_t*)&net_count_1 + 4);
     
-    // Quyết định có nén dữ liệu LiDAR hay không (nếu có nhiều hơn 100 điểm)
-    bool compress_points = stable_point_count > 100; 
+    // // Quyết định có nén dữ liệu LiDAR hay không (nếu có nhiều hơn 100 điểm)
+    // bool compress_points = stable_point_count > 100; 
     
-    if (compress_points) {
-        LOG_INFO << "Compressing " << stable_point_count << " points";
-        std::vector<uint8_t> point_data(stable_point_count * 8);
-        size_t offset = 0;
-        for (const auto& p : stable_lidar_points) {
-            uint32_t net_x = float_to_net(p.x);
-            uint32_t net_y = float_to_net(p.y);
-            memcpy(point_data.data() + offset, &net_x, 4);
-            memcpy(point_data.data() + offset + 4, &net_y, 4);
-            offset += 8;
-        }
+    // if (compress_points) {
+    //     LOG_INFO << "Compressing " << stable_point_count << " points";
+    //     std::vector<uint8_t> point_data(stable_point_count * 8);
+    //     size_t offset = 0;
+    //     for (const auto& p : stable_lidar_points) {
+    //         uint32_t net_x = float_to_net(p.x);
+    //         uint32_t net_y = float_to_net(p.y);
+    //         memcpy(point_data.data() + offset, &net_x, 4);
+    //         memcpy(point_data.data() + offset + 4, &net_y, 4);
+    //         offset += 8;
+    //     }
         
-        // Tính toán kích thước buffer cần thiết cho dữ liệu nén
-        uLongf compressed_size = compressBound(point_data.size());
-        std::vector<uint8_t> compressed(compressed_size);
+    //     // Tính toán kích thước buffer cần thiết cho dữ liệu nén
+    //     uLongf compressed_size = compressBound(point_data.size());
+    //     std::vector<uint8_t> compressed(compressed_size);
         
-        // Thực hiện nén với zlib, ưu tiên tốc độ (Z_BEST_SPEED)
-        if (compress2(compressed.data(), &compressed_size, 
-                     point_data.data(), point_data.size(), 
-                     Z_BEST_SPEED) == Z_OK) {
-            LOG_INFO << "[BuildPacket] Compressed " << point_data.size() 
-                 << " bytes to " << compressed_size << " bytes";
-            // Thêm kích thước gốc của dữ liệu vào trước để phía server biết giải nén ra bao nhiêu
-            uint32_t orig_size = htonl(point_data.size());
-            // Ghi kích thước gốc của dữ liệu chưa nén vào payload
-            payload.insert(payload.end(), (uint8_t*)&orig_size, (uint8_t*)&orig_size + 4);
+    //     // Thực hiện nén với zlib, ưu tiên tốc độ (Z_BEST_SPEED)
+    //     if (compress2(compressed.data(), &compressed_size, 
+    //                  point_data.data(), point_data.size(), 
+    //                  Z_BEST_SPEED) == Z_OK) {
+    //         LOG_INFO << "[BuildPacket] Compressed " << point_data.size() 
+    //              << " bytes to " << compressed_size << " bytes";
+    //         // Thêm kích thước gốc của dữ liệu vào trước để phía server biết giải nén ra bao nhiêu
+    //         uint32_t orig_size = htonl(point_data.size());
+    //         // Ghi kích thước gốc của dữ liệu chưa nén vào payload
+    //         payload.insert(payload.end(), (uint8_t*)&orig_size, (uint8_t*)&orig_size + 4);
             
-            compressed.resize(compressed_size);
-            payload.insert(payload.end(), compressed.begin(), compressed.end());
-        } else {
-            LOG_ERROR << "[BuildPacket] Compression failed!";
-            compress_points = false;
-        }
-    }
+    //         compressed.resize(compressed_size);
+    //         payload.insert(payload.end(), compressed.begin(), compressed.end());
+    //     } else {
+    //         LOG_ERROR << "[BuildPacket] Compression failed!";
+    //         compress_points = false;
+    //     }
+    // }
     
-    // Nếu không nén, ghi trực tiếp dữ liệu điểm vào payload
-    if (!compress_points) {
-        for (const auto& p : stable_lidar_points) {
-            uint32_t net_x = float_to_net(p.x);
-            uint32_t net_y = float_to_net(p.y);
-            payload.insert(payload.end(), (uint8_t*)&net_x, (uint8_t*)&net_x + 4);
-            payload.insert(payload.end(), (uint8_t*)&net_y, (uint8_t*)&net_y + 4);
-        }
-    }
+    // // Nếu không nén, ghi trực tiếp dữ liệu điểm vào payload
+    // if (!compress_points) {
+    //     for (const auto& p : stable_lidar_points) {
+    //         uint32_t net_x = float_to_net(p.x);
+    //         uint32_t net_y = float_to_net(p.y);
+    //         payload.insert(payload.end(), (uint8_t*)&net_x, (uint8_t*)&net_x + 4);
+    //         payload.insert(payload.end(), (uint8_t*)&net_y, (uint8_t*)&net_y + 4);
+    //     }
+    // }
     
     //----- Đóng gói REALTIME POINTS (Luôn là dữ liệu thô) ---
     uint32_t realtime_point_count = realtime_lidar_points.size();
@@ -190,21 +211,7 @@ std::string buildRealtimePacket(
     }
 
     // --- Xây dựng header của gói tin ---
-    PacketHeader header;
-    header.magic = htons(MAGIC_NUMBER); // Số magic để xác thực
-    header.type = REALTIME_STATUS;      // Loại gói tin
-    header.flags = compress_points ? FLAG_COMPRESSED : 0; // Cờ báo nén
-    header.length = htonl(payload.size()); // Độ dài payload
-    header.checksum = htonl(calculateCRC32(payload.data(), payload.size())); // Checksum CRC32
-    
-    // --- Ghép header và payload thành gói tin hoàn chỉnh ---
-    std::string packet(12 + payload.size(), 0);
-    memcpy(&packet[0], &header.magic, 2);
-    packet[2] = header.type;
-    packet[3] = header.flags;
-    memcpy(&packet[4], &header.length, 4);
-    memcpy(&packet[8], &header.checksum, 4);
-    memcpy(&packet[12], payload.data(), payload.size());
+    std::string packet = buildPacket(REALTIME_STATUS, 0, payload);
     
     return packet;
 }
@@ -240,21 +247,7 @@ std::string buildNavigationCommand(
     memcpy(&payload[13], &net_speed, 4);
     
     //Tạo header
-    PacketHeader header;
-    header.magic = htons(MAGIC_NUMBER);
-    header.type = NAVIGATION_COMMAND;
-    header.flags = 0;
-    header.length = htonl(payload.size());
-    header.checksum = htonl(calculateCRC32(payload.data(), payload.size()));
-    
-    // Xây dựng gói tin hoàn chỉnh
-    std::string packet(12 + payload.size(), 0);
-    memcpy(&packet[0], &header.magic, 2);
-    packet[2] = header.type;
-    packet[3] = header.flags;
-    memcpy(&packet[4], &header.length, 4);
-    memcpy(&packet[8], &header.checksum, 4);
-    memcpy(&packet[12], payload.data(), payload.size());
+    std::string packet = buildPacket(NAVIGATION_COMMAND, 0, payload);
     
     return packet;
 }
@@ -266,26 +259,12 @@ std::string buildNavigationCommand(
  */
 std::string buildHeartbeatPacket(int agv_id) {
     std::vector<uint8_t> payload(8);  // agv_id (4) + client_timestamp (4)
-    uint32_t net_id = htonl(agv_id);
+    uint32_t net_id = htonl(static_cast<uint32_t>(agv_id));
     memcpy(payload.data(), &net_id, 4);
     uint32_t timestamp = htonl(static_cast<uint32_t>(std::time(nullptr)));  // Simple timestamp
     memcpy(payload.data() + 4, &timestamp, 4);
 
-    PacketHeader header;
-    header.magic = htons(MAGIC_NUMBER);
-    header.type = HEARTBEAT;
-    header.flags = 0;
-    header.length = htonl(payload.size());
-    header.checksum = htonl(calculateCRC32(payload.data(), payload.size()));
-
-    std::string packet(12 + payload.size(), 0);
-    memcpy(&packet[0], &header.magic, 2);
-    packet[2] = header.type;
-    packet[3] = header.flags;
-    memcpy(&packet[4], &header.length, 4);
-    memcpy(&packet[8], &header.checksum, 4);
-    memcpy(&packet[12], payload.data(), payload.size());
-    return packet;
+    return buildPacket(HEARTBEAT, 0, payload);
 }
 /**
  * @brief Phân tích header của một gói tin từ dữ liệu nhận được.
@@ -295,12 +274,14 @@ std::string buildHeartbeatPacket(int agv_id) {
  */
 bool parsePacketHeader(const uint8_t* data, PacketHeader& header) {
     header.magic = ntohs(*(uint16_t*)data);
-    if (header.magic != MAGIC_NUMBER) return false;
+    if (header.magic != MAGIC_NUMBER) { return false; }
     
     header.type = data[2];
     header.flags = data[3];
-    header.length = ntohl(*(uint32_t*)(data + 4));
-    header.checksum = ntohl(*(uint32_t*)(data + 8));
+    memcpy(&header.length, data + 4, sizeof(uint32_t));
+    memcpy(&header.checksum, data + 8, sizeof(uint32_t));
+    header.length = ntohl(header.length);
+    header.checksum = ntohl(header.checksum);
     
     return true;
 }
@@ -387,7 +368,7 @@ void CommunicationServer::sendStatus(const AGVStatusPacket& status) {
         status.battery_connected,
         status.current_speed,
         status.plc_registers,
-        status.stable_lidar_points,    // Dữ liệu stable
+        // status.stable_lidar_points,    // Dữ liệu stable
         status.realtime_lidar_points,  // Dữ liệu realtime       
         status.timestamp
     );
@@ -395,11 +376,13 @@ void CommunicationServer::sendStatus(const AGVStatusPacket& status) {
     // Gửi gói tin với tiền tố là độ dài gói tin (4 bytes)
     uint32_t size = htonl(packet.size());
     LOG_INFO << "[SERSEND] Sending packet size: " << packet.size() 
-             << ", Stable points: " << status.stable_lidar_points.size()
+            //  << ", Stable points: " << status.stable_lidar_points.size()
              << ", Realtime points: " << status.realtime_lidar_points.size();
     std::lock_guard<std::mutex> lock(connection_mutex);
     if (send(socket_fd, &size, 4, MSG_NOSIGNAL) == 4) {
         if (send(socket_fd, packet.data(), packet.size(), MSG_NOSIGNAL) == static_cast<ssize_t>(packet.size())) {
+            // Gửi PING ngay sau khi gửi gói trạng thái thành công để đo độ trễ
+            sendPing();
             total_packets_sent++;
             total_bytes_sent += packet.size() + 4;
             LOG_INFO << "[SERSEND] Successfully sent packet #" << total_packets_sent;
@@ -426,6 +409,28 @@ void CommunicationServer::sendHeartbeat() {
             LOG_DEBUG << "[CommServer] Heartbeat sent";
         }
     }
+}
+
+/**
+ * @brief Gửi gói tin PING để đo độ trễ.
+ */
+void CommunicationServer::sendPing() {
+    // Lấy thời gian hiện tại với độ chính xác cao (microseconds)
+    auto t1 = std::chrono::high_resolution_clock::now();
+    uint64_t timestamp_us = std::chrono::duration_cast<std::chrono::microseconds>(t1.time_since_epoch()).count();
+
+    // Chuẩn bị payload chứa timestamp
+    std::vector<uint8_t> payload(8);
+    uint64_t net_ts = htobe64(timestamp_us); // Chuyển sang network byte order
+    memcpy(payload.data(), &net_ts, 8);
+
+    // Xây dựng gói tin hoàn chỉnh
+    std::string packet = BinaryProtocol::buildPacket(BinaryProtocol::PING, 0, payload);
+    
+    // Gửi gói tin (hàm sendData đã bao gồm size prefix)
+    sendData(packet);
+
+    LOG_INFO << "[Latency Check] Sent PING with timestamp " << timestamp_us;
 }
 
 /**
@@ -513,6 +518,21 @@ void CommunicationServer::processReceivedData(const std::string& data) {
             LOG_INFO << "[CommServer] Processed heartbeat ACK successfully"; // Add this
         } else {
             LOG_WARNING << "[CommServer] Failed to parse heartbeat ACK"; // Add this
+        }
+    } else if (header.type == BinaryProtocol::PONG) {
+        if (payload.size() >= 8) {
+            // Lấy lại timestamp t1 đã gửi đi
+            uint64_t t1_us;
+            memcpy(&t1_us, payload.data(), 8);
+            t1_us = be64toh(t1_us);
+
+            // Lấy thời gian hiện tại t2
+            auto t2 = std::chrono::high_resolution_clock::now();
+            uint64_t t2_us = std::chrono::duration_cast<std::chrono::microseconds>(t2.time_since_epoch()).count();
+
+            // Tính toán và in ra độ trễ
+            double latency_ms = (t2_us - t1_us) / 1000.0;
+            LOG_INFO << "[Latency Check] Received PONG. Round-Trip Time: " << latency_ms << " ms";
         }
     }
 }
@@ -962,7 +982,15 @@ void CommunicationServer::closeSocket() {
 bool CommunicationServer::sendData(const std::string& data) {
     if (!is_connected || socket_fd < 0) return false;
     
-    ssize_t bytes_sent = send(socket_fd, data.c_str(), data.length(), MSG_NOSIGNAL);
+    // Gửi tiền tố kích thước trước
+    uint32_t size = htonl(data.size());
+    if (send(socket_fd, &size, 4, MSG_NOSIGNAL) != 4) {
+        LOG_ERROR << "[CommServer] Failed to send size prefix: " << strerror(errno);
+        is_connected = false;
+        return false;
+    }
+
+    ssize_t bytes_sent = send(socket_fd, data.data(), data.size(), MSG_NOSIGNAL);
     
     if (bytes_sent < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
