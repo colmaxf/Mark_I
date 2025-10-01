@@ -424,57 +424,81 @@ void SystemManager::plc_thread_func() {
     LOG_SET_CONTEXT("PLC");
     LOG_INFO << "[PLC Thread] Starting...";
 
-    bool connection_established = false; // Cờ trạng thái kết nối PLC.
-    for (int attempt = 1; attempt <= 3 && running_; ++attempt) {
-        if (plc_ptr_->connect()) {
-            connection_established = true;
-            break;
-        }
-        LOG_ERROR << "[PLC Thread] Connection attempt " << attempt << " failed.";
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-    }
-
-    // Cập nhật trạng thái kết nối PLC vào state_ chung.
-    {
-        std::lock_guard<std::mutex> lock(state_.state_mutex);
-        state_.plc_connected = connection_established;
-        state_.last_plc_status = connection_established ? "PLC connected" : "PLC connection failed";
-    }
-
-    if (!connection_established) {
-        LOG_ERROR << "[PLC Thread] Could not connect to PLC. Thread will exit.";
-        return;
-    }
-
-    initializeSystem();
-
-    plc_ptr_->monitorRegister("D", 102,
-        [this](const std::string&, uint32_t, uint16_t, uint16_t new_val) {
-            if (new_val == 5) {
-                LOG_WARNING << "[PLC Monitor] D102 is 5 (Error State). Acknowledging.";
-                plc_in_error_state_ = true;
-                plc_command_queue_.push("WRITE_D110_2");
-            } else if (new_val == 0 && plc_in_error_state_) {
-                LOG_INFO << "[PLC Monitor] D102 is 0 after error. Resetting.";
-                plc_in_error_state_ = false;
-                plc_command_queue_.push("WRITE_D110_1");
-            }
-        }, 250);
-
+    // Vòng lặp quản lý trạng thái chính: Luôn chạy để đảm bảo PLC được kết nối.
     while (running_) {
-        std::string command;
-        if (plc_command_queue_.pop(command)) {
-            try {
-                std::string response = parseAndExecutePlcCommand(command, *plc_ptr_);
-                plc_result_queue_.push(response);
-                std::lock_guard<std::mutex> lock(state_.state_mutex);
-                state_.last_plc_status = response;
-            } catch (const std::exception& e) {
-                LOG_ERROR << "[PLC Thread] Error executing command '" << command << "': " << e.what();
-                plc_result_queue_.push("Error: " + std::string(e.what()));
+        // ----- TRẠNG THÁI: ĐÃ KẾT NỐI -> XỬ LÝ LỆNH VÀ GIÁM SÁT -----
+        if (plc_ptr_->isConnected()) {
+            std::string command;
+            // Lấy lệnh từ queue (không block)
+            if (plc_command_queue_.pop(command)) {
+                try {
+                    // Thực thi lệnh. Nếu mất kết nối, hàm này sẽ throw exception.
+                    LOG_INFO << "[PLC Thread] Executing command: " << command;
+                    std::string response = parseAndExecutePlcCommand(command, *plc_ptr_);
+                    plc_result_queue_.push(response);
+                    {
+                        std::lock_guard<std::mutex> lock(state_.state_mutex);
+                        state_.last_plc_status = response;
+                    }
+                } catch (const std::exception& e) {
+                    LOG_ERROR << "[PLC Thread] Connection lost while executing command '" << command << "': " << e.what();
+                    
+                    // --- HÀNH ĐỘNG KHI MẤT KẾT NỐI ---
+                    plc_ptr_->stopAllMonitors(); // Dừng tất cả các monitor cũ để tránh thread leak
+                    plc_ptr_->disconnect();      // Đóng socket cũ
+                    {
+                        std::lock_guard<std::mutex> lock(state_.state_mutex);
+                        state_.plc_connected = false; // Cập nhật trạng thái
+                    }
+                    // Vòng lặp chính sẽ chuyển sang trạng thái kết nối lại ở lần lặp sau.
+                }
+            }
+            // Ngủ một chút để tránh chiếm dụng CPU khi không có lệnh
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        } 
+        // ----- TRẠNG THÁI: MẤT KẾT NỐI -> THỬ KẾT NỐI LẠI -----
+        else {
+            LOG_INFO << "[PLC Thread] PLC disconnected. Attempting to reconnect...";
+            bool connection_established = false;
+            
+            // Thử kết nối lại 3 lần
+            for (int attempt = 1; attempt <= 3 && running_; ++attempt) {
+                if (plc_ptr_->connect()) {
+                    connection_established = true;
+                    LOG_INFO << "[PLC Thread] PLC reconnected successfully.";
+                    break;
+                }
+                LOG_WARNING << "[PLC Thread] Reconnection attempt " << attempt << " failed.";
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+            }
+
+            // Xử lý sau khi thử kết nối lại
+            if (connection_established) {
+                // --- KHI KẾT NỐI LẠI THÀNH CÔNG ---
+                {
+                    std::lock_guard<std::mutex> lock(state_.state_mutex);
+                    state_.plc_connected = true; // Cập nhật trạng thái
+                }
+                // Khởi tạo lại hệ thống và các monitor cho kết nối mới
+                initializeSystem();
+                plc_ptr_->monitorRegister("D", 102,
+                    [this](const std::string&, uint32_t, uint16_t, uint16_t new_val) {
+                        if (new_val == 5) {
+                            LOG_WARNING << "[PLC Monitor] D102 is 5 (Error State). Acknowledging.";
+                            plc_in_error_state_ = true;
+                            plc_command_queue_.push("WRITE_D110_2");
+                        } else if (new_val == 0 && plc_in_error_state_) {
+                            LOG_INFO << "[PLC Monitor] D102 is 0 after error. Resetting.";
+                            plc_in_error_state_ = false;
+                            plc_command_queue_.push("WRITE_D110_1");
+                        }
+                    }, 250);
+            } else {
+                // Nếu sau 3 lần vẫn thất bại, đợi một lúc rồi thử lại từ đầu
+                LOG_ERROR << "[PLC Thread] Could not reconnect after 3 attempts. Waiting for 5 seconds.";
+                std::this_thread::sleep_for(std::chrono::seconds(5));
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
     // Dọn dẹp khi luồng kết thúc.
@@ -500,101 +524,157 @@ void SystemManager::lidar_thread_func() {
     pin_thread_to_core(1);
     LOG_INFO << "[LiDAR Thread] Starting...";
 
-    auto lidar_processor = std::make_unique<LidarProcessor>();
-    if (!lidar_processor->initialize() || !lidar_processor->start()) {
-        LOG_ERROR << "[LiDAR Thread] Failed to initialize/start LidarProcessor";
-        std::lock_guard<std::mutex> lock(state_.state_mutex);
-        state_.lidar_connected = false;
-        return;
-    }
+    // Vòng lặp chính để quản lý kết nối và xử lý dữ liệu LiDAR.
+    // Nếu kết nối bị mất, thử khởi động lại.
+    while (running_) {
+        auto lidar_processor = std::make_unique<LidarProcessor>();
+        // Thử khởi tạo với retry
+        int init_attempts = 0;
+        bool initialized = false;
 
-    {
-        std::lock_guard<std::mutex> lock(state_.state_mutex);
-        state_.lidar_connected = true;
-    }
+        // Vòng lặp khởi tạo với tối đa 3 lần thử.
+        // Nếu thất bại, đợi 10 giây rồi thử lại từ đầu.
+        // Cập nhật trạng thái kết nối LiDAR trong state_.
+        while (init_attempts < 3 && running_) {
+            if (lidar_processor->initialize() && lidar_processor->start()) {
+                initialized = true;
+                break;
+            }
 
-    // Callback xử lý dữ liệu thời gian thực để phát hiện vật cản và điều khiển tốc độ.
-    lidar_processor->setRealtimeCallback([this](const std::vector<LidarPoint>& points) {
-        LOG_INFO         << "[LIDAR Thread] Processed frame. Points: " << points.size();
-        {
-            // Đóng gói dữ liệu điểm để gửi đi
-            std::vector<ServerComm::Point2D> points_to_send;
-            points_to_send.reserve(points.size());
-            for (const auto& p : points) {
-                points_to_send.push_back({p.x, p.y});
-            }
-            // Đẩy vào hàng đợi thời gian thực
-            realtime_points_queue_.push(std::move(points_to_send));
-        }
-        float min_front = 999.0f;
-        // Tìm khoảng cách nhỏ nhất trong vùng 90 độ phía trước.
-        for (const auto& p : points) {
-            // Góc được tính bằng radian, 2.356 rad ≈ 135°, 3.927 rad ≈ 225°.
-            if (p.angle > 2.356 && p.angle < 3.927) {
-                min_front = std::min(min_front, p.distance);
-            }
+            LOG_WARNING << "[LiDAR Thread] Initialization attempt "
+                        << (init_attempts + 1) << " failed. Retrying in 3s...";
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            init_attempts++;
         }
 
-        // Nếu không có điểm nào ở phía trước, bỏ qua.
-        if (min_front >= 999.0f) return;
+        // Nếu sau 3 lần thử vẫn không thành công, đợi 10 giây rồi thử lại từ đầu.
+        if (!initialized) {
+            LOG_ERROR << "[LiDAR Thread] Failed to initialize after 3 attempts";
+            std::lock_guard<std::mutex> lock(state_.state_mutex);
+            state_.lidar_connected = false;
 
-        float min_dist_cm = min_front * 100.0f; // Chuyển từ mét sang cm.
-        int smooth_speed = 0;
-        bool movement_active = false;
+            // Đợi 10 giây rồi thử lại
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+            continue;
+        }
 
-        // Khóa mutex để cập nhật và đọc state_ một cách an toàn.
         {
             std::lock_guard<std::mutex> lock(state_.state_mutex);
-            state_.current_front_distance = min_dist_cm;
-            state_.is_safe_to_move = min_dist_cm > EMERGENCY_STOP_DISTANCE_CM;
-            state_.last_safety_update = std::chrono::steady_clock::now().time_since_epoch().count();
-            movement_active = state_.movement_command_active;
+            state_.lidar_connected = true;
+        }
 
-            // Cập nhật chuỗi trạng thái LiDAR để ghi log
-            std::stringstream ss;
-            ss << "Points: " << points.size() << ", FrontDist: " << std::fixed << std::setprecision(1) << min_dist_cm << "cm, Safe: " << (state_.is_safe_to_move ? "Yes" : "No");
-            state_.last_lidar_data = ss.str();
-            LOG_INFO << "[LIDAR Thread][REALTIMECALLBACK] state_.last_lidar_data: "<< state_.last_lidar_data;
-                        // Tính toán tốc độ mượt mà dựa trên trạng thái an toàn và lệnh di chuyển.
-            if (state_.is_safe_to_move && movement_active) {
-                smooth_speed = calculateSmoothSpeed(min_dist_cm, true);
-            } else {
-                smooth_speed = calculateSmoothSpeed(min_dist_cm, false);
+        // Callback xử lý dữ liệu thời gian thực để phát hiện vật cản và điều khiển tốc độ.
+        lidar_processor->setRealtimeCallback([this](const std::vector<LidarPoint>& points) {
+            LOG_INFO << "[LIDAR Thread] Processed frame. Points: " << points.size();
+            {
+                // Đóng gói dữ liệu điểm để gửi đi
+                std::vector<ServerComm::Point2D> points_to_send;
+                points_to_send.reserve(points.size());
+                for (const auto& p : points) {
+                    points_to_send.push_back({p.x, p.y});
+                }
+                // Đẩy vào hàng đợi thời gian thực
+                realtime_points_queue_.push(std::move(points_to_send));
+            }
+            float min_front = 999.0f;
+            // Tìm khoảng cách nhỏ nhất trong vùng 90 độ phía trước.
+            for (const auto& p : points) {
+                // Góc được tính bằng radian, 2.356 rad ≈ 135°, 3.927 rad ≈ 225°.
+                if (p.angle > 2.356 && p.angle < 3.927) {
+                    min_front = std::min(min_front, p.distance);
+                }
+            }
+
+            // Nếu không có điểm nào ở phía trước, bỏ qua.
+            if (min_front >= 999.0f) return;
+
+            float min_dist_cm = min_front * 100.0f; // Chuyển từ mét sang cm.
+            int smooth_speed = 0; // Tốc độ mượt mà để gửi đến PLC.
+            bool movement_active = false; // Cờ lệnh di chuyển hiện tại.
+
+            // Khóa mutex để cập nhật và đọc state_ một cách an toàn.
+            {
+                std::lock_guard<std::mutex> lock(state_.state_mutex); // Khóa state_mutex để truy cập state_.
+                state_.current_front_distance = min_dist_cm; // Cập nhật khoảng cách phía trước.
+                state_.is_safe_to_move = min_dist_cm > EMERGENCY_STOP_DISTANCE_CM; // Cập nhật trạng thái an toàn.
+                state_.last_safety_update = std::chrono::steady_clock::now().time_since_epoch().count(); // Cập nhật thời gian.
+                movement_active = state_.movement_command_active; // Lấy trạng thái lệnh di chuyển hiện tại.
+
+                // Cập nhật chuỗi trạng thái LiDAR để ghi log
+                std::stringstream ss;
+                ss << "Points: " << points.size()
+                   << ", FrontDist: " << std::fixed << std::setprecision(1)
+                   << min_dist_cm << "cm, Safe: " << (state_.is_safe_to_move ? "Yes" : "No");
+                state_.last_lidar_data = ss.str();
+                LOG_INFO << "[LIDAR Thread][REALTIMECALLBACK] state_.last_lidar_data: " << state_.last_lidar_data;
+                // Tính toán tốc độ mượt mà dựa trên trạng thái an toàn và lệnh di chuyển.
+                if (state_.is_safe_to_move && movement_active) { // Chỉ tính tốc độ nếu an toàn và có lệnh di chuyển.
+                    smooth_speed = calculateSmoothSpeed(min_dist_cm, true); // movement_active = true
+                } else {
+                    smooth_speed = calculateSmoothSpeed(min_dist_cm, false); // movement_active = false
+                }
+            }
+
+            // Chỉ gửi lệnh tốc độ đến PLC nếu giá trị tốc độ thay đổi để giảm tải.
+            static int last_sent_speed = -1;
+            if (smooth_speed != last_sent_speed) { // Gửi lệnh mới nếu tốc độ thay đổi.
+                LOG_INFO << "[LIDAR Thread] Sending speed command to PLC: " << smooth_speed;
+                // Đẩy lệnh điều khiển tốc độ vào hàng đợi PLC.
+                plc_command_queue_.push("WRITE_D103_" + std::to_string(smooth_speed));
+                last_sent_speed = smooth_speed;
+            }
+        });
+
+        // // Callback xử lý dữ liệu ổn định để gửi lên server.
+        // lidar_processor->setStablePointsCallback([this](const std::vector<LidarPoint>& stable_points) {
+        //     if (stable_points.empty()) {
+        //         LOG_WARNING << "[LiDAR Thread][STABLEPOINTSCALLBACK] No stable points received.";
+        //         return;
+        //     }
+        //     std::vector<Point2D> stable_2d;
+        //     stable_2d.reserve(stable_points.size());
+        //     LOG_INFO << "[LiDAR Thread][STABLEPOINTSCALLBACK] Stable points received. Size: " << stable_points.size();
+        //     for (const auto& p : stable_points) {
+        //         stable_2d.push_back({p.x, p.y});
+        //     }
+        //     // Đẩy vào hàng đợi không khóa để luồng server xử lý.
+        //     stable_points_queue_.push(std::move(stable_2d));
+        //     LOG_INFO << "[LiDAR Thread] Stable points pushed to queue. Size: " << stable_2d.size();
+        // });
+
+        // Monitor loop - kiểm tra health định kỳ
+        while (running_ && lidar_processor->isConnectionHealthy()) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+
+            // Update connection status
+            {
+                std::lock_guard<std::mutex> lock(state_.state_mutex);
+                state_.lidar_connected = lidar_processor->isConnectionHealthy();
             }
         }
 
-        // Chỉ gửi lệnh tốc độ đến PLC nếu giá trị tốc độ thay đổi để giảm tải.
-        static int last_sent_speed = -1;
-        if (smooth_speed != last_sent_speed) {
-            plc_command_queue_.push("WRITE_D103_" + std::to_string(smooth_speed));
-            last_sent_speed = smooth_speed;
+        // Nếu tới đây nghĩa là mất kết nối
+        LOG_WARNING << "[LiDAR Thread] LiDAR connection lost. Will restart processor...";
+        lidar_processor->stop();
+
+        {
+            std::lock_guard<std::mutex> lock(state_.state_mutex);
+            state_.lidar_connected = false;
+            state_.is_safe_to_move = false;  // Set unsafe khi mất LiDAR
         }
-    });
 
-    // // Callback xử lý dữ liệu ổn định để gửi lên server.
-    // lidar_processor->setStablePointsCallback([this](const std::vector<LidarPoint>& stable_points) {
+        // Gửi lệnh dừng khẩn cấp nếu đang di chuyển
+        if (state_.is_moving) {
+            plc_command_queue_.push("WRITE_D100_0");  // Stop
+            plc_command_queue_.push("WRITE_D103_0");  // Speed = 0
+            LOG_WARNING << "[LiDAR Thread] Emergency stop due to LiDAR disconnection";
+        }
 
-    //     if (stable_points.empty()) {
-    //         LOG_WARNING << "[LiDAR Thread][STABLEPOINTSCALLBACK] No stable points received.";
-    //         return;
-    //     }
-    //     std::vector<Point2D> stable_2d;
-    //     stable_2d.reserve(stable_points.size());
-    //     LOG_INFO << "[LiDAR Thread][STABLEPOINTSCALLBACK] Stable points received. Size: " << stable_points.size();
-    //     for (const auto& p : stable_points) {
-    //         stable_2d.push_back({p.x, p.y});
-    //     }
-    //     // Đẩy vào hàng đợi không khóa để luồng server xử lý.
-    //     stable_points_queue_.push(std::move(stable_2d));
-    //     LOG_INFO << "[LiDAR Thread] Stable points pushed to queue. Size: " << stable_2d.size();
-    // });
-
-    LOG_INFO << "[LiDAR Thread] Entering main loop.";
-    while (running_) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // Đợi trước khi thử khởi động lại
+        LOG_INFO << "[LiDAR Thread] Entering main loop.";
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));// Đợi 1 giây trước khi thử lại
     }
-
-    lidar_processor->stop();
+    // Dừng và dọn dẹp khi luồng kết thúc.
     LOG_INFO << "[LiDAR Thread] Stopped.";
 }
 
@@ -609,15 +689,13 @@ void SystemManager::lidar_thread_func() {
  */
 void SystemManager::command_handler_thread() {
     pin_thread_to_core(3);
-    LOG_REGISTER_CONTEXT("CMD_HANDLER", "Server Command Handler Thread");
-    LOG_SET_CONTEXT("CMD_HANDLER");
-    LOG_INFO << "Thread started. Waiting for commands from server...";
+    LOG_INFO << "[Command Handler] Thread started. Waiting for commands from server...";
 
     while (running_) {
         ServerComm::NavigationCommand cmd;
         // Lấy lệnh từ server (getNextCommand có thể bị block).
         if (comm_server_->getNextCommand(cmd)) {
-            LOG_INFO << "Processing command type: " << static_cast<int>(cmd.type);
+            LOG_INFO << "[Command Handler] Processing command type: " << static_cast<int>(cmd.type);
 
             bool is_safe;
             // Lấy trạng thái an toàn hiện tại.
@@ -626,8 +704,10 @@ void SystemManager::command_handler_thread() {
                 is_safe = state_.is_safe_to_move;
             }
 
-            if (plc_in_error_state_) {
-                LOG_ERROR << "Command ignored! PLC is in error state.";
+            LOG_ERROR << "[Command Handler] Command ignored! PLC is in error state: " << plc_in_error_state_ 
+                      << ", PLC connected: " << (plc_ptr_ ? (plc_ptr_->isConnected() ? "Yes" : "No") : "No");
+            if (plc_in_error_state_ || plc_ptr_ == nullptr || !plc_ptr_->isConnected()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 continue;
             }
 
@@ -635,6 +715,8 @@ void SystemManager::command_handler_thread() {
                 // Các lệnh di chuyển tiến.
                 case ServerComm::NavigationCommand::MOVE_TO_POINT:
                 case ServerComm::NavigationCommand::FOLLOW_PATH: {
+                    LOG_INFO << "[Command Handler] Processing movement command.";
+                    // Tạo lệnh di chuyển.
                     std::string move_cmd = "WRITE_D100_1";
                     // Lưu lại lệnh di chuyển cuối cùng để có thể tự động tiếp tục.
                     {
@@ -656,6 +738,8 @@ void SystemManager::command_handler_thread() {
                 }
                 // Lệnh xoay.
                 case ServerComm::NavigationCommand::ROTATE_TO_ANGLE: {
+                    LOG_INFO << "[Command Handler] Processing rotation command.";
+                    // Chỉ thực hiện nếu an toàn.
                     if (is_safe) {
                         LOG_INFO << "Executing rotation command from server.";
                         std::lock_guard<std::mutex> lock(state_.state_mutex);
@@ -671,7 +755,7 @@ void SystemManager::command_handler_thread() {
                 // Lệnh dừng.
                 case ServerComm::NavigationCommand::STOP:
                 case ServerComm::NavigationCommand::EMERGENCY_STOP: {
-                    LOG_INFO << "Executing STOP command from server.";
+                    LOG_INFO << "[Command Handler] Executing STOP command from server.";
                     plc_command_queue_.push("WRITE_D100_0");
                     plc_command_queue_.push("WRITE_D101_0");
                     // Xóa lệnh di chuyển cuối cùng để ngăn việc tự động tiếp tục.
@@ -690,7 +774,7 @@ void SystemManager::command_handler_thread() {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    LOG_INFO << "Command handler thread stopped.";
+    LOG_INFO << "[Command Handler] Thread stopped.";
 }
 
 /**
@@ -768,24 +852,44 @@ void SystemManager::battery_thread_func() {
     LOG_INFO << "[Battery Thread] Starting...";
 
     JBDBMSSingleton& bms = JBDBMSSingleton::getInstance(BATTERY_BMS_SERIAL_PORT);
-    if (!bms.initialize()) {
-        LOG_ERROR << "[Battery Thread] Failed to initialize BMS connection.";
-        return;
-    }
+    bool is_bms_initialized = false; // Cờ theo dõi trạng thái kết nối cục bộ
 
+    // Vòng lặp quản lý trạng thái chính
     while (running_) {
-        // Cập nhật dữ liệu từ BMS.
-        if (bms.updateBatteryData()) {
-            BatteryData data = bms.getBatteryData();
-            std::lock_guard<std::mutex> lock(state_.state_mutex);
-            state_.battery_connected = true;
-            state_.battery_level = data.stateOfCharge;
+        if (is_bms_initialized) {
+            // ----- TRẠNG THÁI: ĐÃ KẾT NỐI -> CẬP NHẬT DỮ LIỆU -----
+            if (bms.updateBatteryData()) { // Cập nhật thành công
+                BatteryData data = bms.getBatteryData();
+                std::lock_guard<std::mutex> lock(state_.state_mutex);
+                state_.battery_connected = true;
+                state_.battery_level = data.stateOfCharge;
+            } else {
+                // Nếu update thất bại, coi như mất kết nối và thử kết nối lại
+                LOG_WARNING << "[Battery Thread] Failed to update BMS data. Connection likely lost.";
+                is_bms_initialized = false; // Kích hoạt logic kết nối lại ở lần lặp sau
+                {
+                    std::lock_guard<std::mutex> lock(state_.state_mutex);
+                    state_.battery_connected = false;
+                }
+            }
+            // Đợi 20 giây cho lần cập nhật tiếp theo
+            std::this_thread::sleep_for(std::chrono::seconds(20));
+
         } else {
-            LOG_WARNING << "[Battery Thread] Failed to update BMS data.";
-            std::lock_guard<std::mutex> lock(state_.state_mutex);
-            state_.battery_connected = false;
+            // ----- TRẠNG THÁI: MẤT KẾT NỐI -> THỬ KẾT NỐI LẠI -----
+            LOG_INFO << "[Battery Thread] Attempting to initialize BMS connection...";
+            if (bms.initialize()) { // Kết nối thành công
+                LOG_INFO << "[Battery Thread] BMS connected successfully.";
+                is_bms_initialized = true; // Đánh dấu đã kết nối thành công
+            } else {
+                LOG_ERROR << "[Battery Thread] Failed to initialize BMS. Retrying in 5 seconds...";
+                {
+                    std::lock_guard<std::mutex> lock(state_.state_mutex);
+                    state_.battery_connected = false;
+                }
+                std::this_thread::sleep_for(std::chrono::seconds(5)); // Đợi 5 giây trước khi thử lại
+            }
         }
-        std::this_thread::sleep_for(std::chrono::seconds(20));
     }
     LOG_INFO << "[Battery Thread] Stopped.";
 }

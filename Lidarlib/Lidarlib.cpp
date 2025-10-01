@@ -611,9 +611,52 @@ void LidarProcessor::processLidarData() {
 
     LOG_INFO  << "[LIDAR-RT] Processing thread started";
     
+    last_data_time_ = std::chrono::steady_clock::now();
+    auto last_reconnect_attempt = std::chrono::steady_clock::now();
+    
     while (is_running) {
         if (!is_processing) {
-            this_thread::sleep_for(chrono::milliseconds(10));
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+        
+        // Kiểm tra sức khỏe kết nối
+        checkConnectionHealth();
+        
+        // Nếu mất kết nối, thử reconnect mỗi 3 giây
+        if (!connection_healthy_) {
+            auto now = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::seconds>(
+                now - last_reconnect_attempt).count() >= 3) {
+                
+                reconnect_attempts_++;
+                LOG_INFO << "[LIDAR-RT] Reconnect attempt #" << reconnect_attempts_;
+                
+                if (reconnectLidar()) {
+                    LOG_INFO << "[LIDAR-RT] Successfully reconnected after " 
+                            << reconnect_attempts_ << " attempts";
+                    
+                    // Notify callbacks về reconnection
+                    if (realtime_callback) {
+                        std::vector<LidarPoint> empty_points;
+                        empty_points.push_back(LidarPoint(0, 0, 0, 0, 0, 0));
+                        realtime_callback(empty_points);  // Signal reconnection
+                    }
+                } else {
+                    LOG_ERROR << "[LIDAR-RT] Reconnection attempt failed";
+                    
+                    if (reconnect_attempts_ >= MAX_RECONNECT_ATTEMPTS) {
+                        LOG_ERROR << "[LIDAR-RT] Max reconnection attempts reached. "
+                                 << "Please check LiDAR hardware.";
+                        // Có thể trigger alert hoặc safe mode
+                    }
+                }
+                
+                last_reconnect_attempt = now;
+                continue;
+            }
+            
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
         
@@ -628,6 +671,10 @@ void LidarProcessor::processLidarData() {
             this_thread::sleep_for(chrono::milliseconds(1));
             continue;
         }
+
+         // Cập nhật thời gian nhận data cuối
+        last_data_time_ = std::chrono::steady_clock::now();
+        connection_healthy_ = true;
         
         // Kiểm tra sơ bộ tính hợp lệ của gói dữ liệu.
         if (raw_packet.maxdots == 0 || raw_packet.maxdots > CONFIG_CIRCLE_DOTS) {
@@ -803,6 +850,66 @@ bool LidarProcessor::validateScanData(const repark_t& pack) const {
     }
     
     return true;
+}
+
+bool LidarProcessor::reconnectLidar() {
+    LOG_WARNING << "[LIDAR-RT] Attempting to reconnect LiDAR...";
+    
+    // Dọn dẹp connection cũ
+    if (lidar) {
+        lidar.reset();
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    
+    // Tạo connection mới
+    try {
+        lidar = std::make_unique<LakiBeamUDP>(local_ip, local_port, laser_ip, laser_port);
+        
+        // Test connection bằng cách thử lấy data
+        auto start_wait = std::chrono::steady_clock::now();
+        const int timeout_seconds = 5;
+        
+        while (std::chrono::steady_clock::now() - start_wait < 
+               std::chrono::seconds(timeout_seconds)) {
+            repark_t test_packet;
+            if (lidar->get_repackedpack(test_packet)) {
+                if (test_packet.maxdots > 0 && 
+                    test_packet.maxdots <= CONFIG_CIRCLE_DOTS) {
+                    LOG_INFO << "[LIDAR-RT] Reconnection successful! Points: " 
+                             << test_packet.maxdots;
+                    connection_healthy_ = true;
+                    reconnect_attempts_ = 0;
+                    last_data_time_ = std::chrono::steady_clock::now();
+                    return true;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR << "[LIDAR-RT] Reconnection failed: " << e.what();
+    }
+    
+    connection_healthy_ = false;
+    return false;
+}
+
+/**
+ * @brief Kiểm tra sức khỏe kết nối với LiDAR dựa trên thời gian kể từ lần nhận dữ liệu cuối cùng.
+ * @details Nếu không nhận được dữ liệu trong một khoảng thời gian nhất định (2 giây), đánh dấu kết nối là không khỏe mạnh.
+ */
+void LidarProcessor::checkConnectionHealth() {
+    auto now = std::chrono::steady_clock::now();
+    auto time_since_last_data = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - last_data_time_).count();
+
+    // Nếu không nhận được data trong 2 giây
+    if (time_since_last_data > LIDAR_RECONNECT_DELAY_SECONDS * 1000) {
+        if (connection_healthy_) {
+            LOG_WARNING << "[LIDAR-RT] No data received for " 
+                       << time_since_last_data << "ms. Connection may be lost.";
+            connection_healthy_ = false;
+        }
+    }
 }
 
 /**

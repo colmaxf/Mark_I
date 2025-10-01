@@ -43,7 +43,9 @@
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
-
+// Thời gian chờ kết nối lại LiDAR (giây)
+#define LIDAR_RECONNECT_DELAY_SECONDS 2
+#define MAX_RECONNECT_ATTEMPTS 5
 // Khoảng cách an toàn (cm)
 #define SAFE_DISTANCE_CM 200.0f
 // Khoảng cách cảnh báo (cm)

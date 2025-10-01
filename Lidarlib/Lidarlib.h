@@ -154,6 +154,10 @@ private:
     
     mutable std::mutex callback_mutex;
     
+    // Connection monitoring
+    std::chrono::steady_clock::time_point last_data_time_;
+    std::atomic<bool> connection_healthy_{true};
+    std::atomic<int> reconnect_attempts_{0};
 public:
     LidarProcessor(const std::string& local_ip = LIDAR_HOST_IP,
                     const std::string& local_port = std::to_string(LIDAR_PORT),
@@ -203,7 +207,9 @@ public:
     void resumeProcessing();
     void resetStatistics();
 
-    
+    // Connection health
+    bool isConnectionHealthy() const { return connection_healthy_.load(); }
+    int getReconnectAttempts() const { return reconnect_attempts_.load(); }
 private:
     // Main processing loop
     void processLidarData();
@@ -220,6 +226,10 @@ private:
     // Data validation
     bool validateScanData(const repark_t& pack) const;
     std::vector<LidarPoint> preprocessPoints(const std::vector<LidarPoint>& raw_points);
+
+    // Connection health monitoring
+    bool reconnectLidar();
+    void checkConnectionHealth();
 };
 
 // Utility functions

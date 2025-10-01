@@ -140,8 +140,8 @@ private:
     std::string portName;
     BatteryData batteryData;
     mutable std::mutex dataMutex;
-    bool isConnected;
     int serialPort;
+    bool isConnected;
     
     /**
      * @brief Hàm khởi tạo riêng tư để thực thi mẫu Singleton.
