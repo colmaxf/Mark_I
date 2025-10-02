@@ -11,9 +11,12 @@
  * @details Khởi tạo đối tượng giao tiếp với server `CommunicationServer` với địa chỉ IP và cổng được cung cấp.
  * @param server_ip Địa chỉ IP của server trung tâm.
  * @param server_port Cổng của server trung tâm.
+ * @param last_processed_cmd_type_ Khởi tạo loại lệnh cuối cùng đã xử lý là STOP để tránh việc bỏ qua lệnh STOP ban đầu.
  */
-SystemManager::SystemManager(const std::string& server_ip, int server_port)
-    : comm_server_(std::make_unique<ServerComm::CommunicationServer>(server_ip, server_port)) {}
+SystemManager::SystemManager(const std::string& server_ip, int server_port) : 
+    comm_server_(std::make_unique<ServerComm::CommunicationServer>(server_ip, server_port)),
+    last_processed_cmd_type_(ServerComm::NavigationCommand::STOP) // Khởi tạo lệnh cuối cùng là STOP
+{}
 
 /**
  * @brief Hàm hủy của lớp SystemManager.
@@ -106,6 +109,15 @@ bool SystemManager::initialize() {
                         status.plc_registers["D110"] = regs[10];
                         status.plc_registers["D200"] = regs[100];
                     }
+                    //--------Đọc từng thanh ghi riêng lẻ (không hiệu quả)--------
+                    // status.plc_registers["D100"] = plc_ptr_->readWord("D", 100);
+                    // status.plc_registers["D101"] = plc_ptr_->readWord("D", 101);
+                    // status.plc_registers["D102"] = plc_ptr_->readWord("D", 102);
+                    // status.plc_registers["D103"] = plc_ptr_->readWord("D", 103);
+                    // status.plc_registers["D110"] = plc_ptr_->readWord("D", 110);
+                    // status.plc_registers["D200"] = plc_ptr_->readWord("D", 200);
+                    //-------------------------------------------------------------
+
                 } catch (const std::exception& e) {
                     LOG_ERROR << "[SystemManager] Failed to read PLC registers: " << e.what();
                 }
@@ -697,6 +709,13 @@ void SystemManager::command_handler_thread() {
         if (comm_server_->getNextCommand(cmd)) {
             LOG_INFO << "[Command Handler] Processing command type: " << static_cast<int>(cmd.type);
 
+            // KIỂM TRA LỆNH LẶP LẠI: Nếu lệnh mới giống lệnh cũ, bỏ qua.
+            if (cmd.type == last_processed_cmd_type_) {
+                LOG_INFO << "[Command Handler] Ignoring duplicate command: " << static_cast<int>(cmd.type);
+                continue;
+            }
+            last_processed_cmd_type_ = cmd.type; // Cập nhật lệnh cuối cùng đã xử lý
+
             bool is_safe;
             // Lấy trạng thái an toàn hiện tại.
             {
@@ -715,9 +734,9 @@ void SystemManager::command_handler_thread() {
                 // Các lệnh di chuyển tiến.
                 case ServerComm::NavigationCommand::MOVE_TO_POINT:
                 case ServerComm::NavigationCommand::FOLLOW_PATH: {
-                    LOG_INFO << "[Command Handler] Processing movement command.";
                     // Tạo lệnh di chuyển.
-                    std::string move_cmd = "WRITE_D100_1";
+                    std::string move_cmd =  cmd.type == ServerComm::NavigationCommand::MOVE_TO_POINT ? "WRITE_D100_1" : "WRITE_D100_2";
+                    LOG_INFO << "[Command Handler] Processing movement command: " << move_cmd;
                     // Lưu lại lệnh di chuyển cuối cùng để có thể tự động tiếp tục.
                     {
                         std::lock_guard<std::mutex> lock(last_command_mutex_);

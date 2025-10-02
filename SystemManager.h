@@ -153,6 +153,7 @@ private:
 
     std::mutex plc_ptr_mutex_; ///< Mutex để bảo vệ truy cập vào `plc_ptr_`.
     std::string last_movement_command_; ///< Lưu trữ lệnh di chuyển cuối cùng để có thể tự động tiếp tục.
+    ServerComm::NavigationCommand::Type last_processed_cmd_type_; ///< Lưu loại lệnh cuối cùng đã xử lý để tránh xử lý lặp lại.
     std::mutex last_command_mutex_; ///< Mutex để bảo vệ truy cập vào `last_movement_command_`.
 
     std::atomic<bool> running_{true}; ///< Biến toàn cục để điều khiển việc dừng tất cả các luồng một cách an toàn.

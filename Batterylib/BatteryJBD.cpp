@@ -617,7 +617,7 @@ bool JBDBMSSingleton::hasAnyProtection() const {
  */
 void demonstrateUsage() {
     // Get singleton instance
-    JBDBMSSingleton& bms = JBDBMSSingleton::getInstance("/dev/ttyAMA0");
+    JBDBMSSingleton& bms = JBDBMSSingleton::getInstance(BATTERY_BMS_SERIAL_PORT);
     
     // Initialize connection
     if (!bms.initialize()) {

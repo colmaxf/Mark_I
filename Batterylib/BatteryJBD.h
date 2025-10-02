@@ -9,6 +9,7 @@
 #include <memory>
 #include <cstdint>
 #include <logger/Logger.h>
+#include <../config.h>
 
 // BMS Status Masks
 #define BMS_STATUS_OK               0
@@ -164,7 +165,7 @@ public:
      * @param port Đường dẫn đến cổng serial (ví dụ: "/dev/ttyUSB0").
      * @return Tham chiếu đến thực thể duy nhất của JBDBMSSingleton.
      */
-    static JBDBMSSingleton& getInstance(const std::string& port = "/dev/ttyUSB0");
+    static JBDBMSSingleton& getInstance(const std::string& port = BATTERY_BMS_SERIAL_PORT);
 
     /**
      * @brief Hàm hủy, tự động đóng kết nối serial.
