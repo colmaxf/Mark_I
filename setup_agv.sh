@@ -17,8 +17,8 @@ echo "===================================================="
 
 # Tạo thư mục cần thiết
 echo "--> Tạo thư mục /usr/local/bin và /var/log/dlt..."
-mkdir -p /usr/local/bin
-mkdir -p /var/log/dlt
+sudo mkdir -p /usr/local/bin
+sudo mkdir -p /var/log/dlt
 
 # 1. Tệp /etc/dlt.conf
 echo "--> Tạo tệp /etc/dlt.conf..."

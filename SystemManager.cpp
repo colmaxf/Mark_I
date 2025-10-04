@@ -730,10 +730,14 @@ void SystemManager::command_handler_thread() {
                 continue;
             }
 
+            // Xử lý các lệnh không được xử lý trong switch để loại bỏ cảnh báo
+            // và đảm bảo chúng không bị bỏ qua một cách âm thầm.
+            // Các lệnh này hiện không được triển khai logic.
+            // TODO: Triển khai logic cho FOLLOW_PATH nếu cần.
             switch (cmd.type) {
                 // Các lệnh di chuyển tiến.
                 case ServerComm::NavigationCommand::MOVE_TO_POINT:
-                case ServerComm::NavigationCommand::FOLLOW_PATH: {
+                case ServerComm::NavigationCommand::REVERSE_TO_POINT: {
                     // Tạo lệnh di chuyển.
                     std::string move_cmd =  cmd.type == ServerComm::NavigationCommand::MOVE_TO_POINT ? "WRITE_D100_1" : "WRITE_D100_2";
                     LOG_INFO << "[Command Handler] Processing movement command: " << move_cmd;
@@ -756,7 +760,8 @@ void SystemManager::command_handler_thread() {
                     break;
                 }
                 // Lệnh xoay.
-                case ServerComm::NavigationCommand::ROTATE_TO_ANGLE: {
+                case ServerComm::NavigationCommand::ROTATE_TO_LEFT:
+                case ServerComm::NavigationCommand::ROTATE_TO_RIGHT:{
                     LOG_INFO << "[Command Handler] Processing rotation command.";
                     // Chỉ thực hiện nếu an toàn.
                     if (is_safe) {
@@ -764,11 +769,19 @@ void SystemManager::command_handler_thread() {
                         std::lock_guard<std::mutex> lock(state_.state_mutex);
                         state_.movement_command_active = true;
                         state_.is_moving = false;
+
                         plc_command_queue_.push("WRITE_D100_1");
-                        plc_command_queue_.push("WRITE_D101_1"); // Giả sử xoay trái.
+                        std:: string rotate_cmd = cmd.type == ServerComm::NavigationCommand::ROTATE_TO_LEFT ? "WRITE_D101_1":"WRITE_D101_2";
+                        //LOG_INFO << "[Command Handler] Processing rotate command: " << rotate_cmd << " to rotate " << cmd.type == ServerComm::NavigationCommand::ROTATE_TO_LEFT ? "Left":"Right";
+                        plc_command_queue_.push(rotate_cmd); // Giả sử xoay trái.
                     } else {
                         LOG_WARNING << "Cannot execute rotation - obstacle detected!";
                     }
+                    break;
+                }
+                case ServerComm::NavigationCommand::FOLLOW_PATH: {
+                    LOG_WARNING << "[Command Handler] Received FOLLOW_PATH command, but it is not implemented yet.";
+                    // TODO: Implement logic for following a path
                     break;
                 }
                 // Lệnh dừng.

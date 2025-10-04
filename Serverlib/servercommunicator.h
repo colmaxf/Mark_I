@@ -63,11 +63,13 @@ struct NavigationCommand {
      * @brief Liệt kê các loại lệnh điều hướng có thể có.
      */
     enum Type { 
-        STOP,             ///< Dừng AGV ngay lập tức.
-        MOVE_TO_POINT,    ///< Di chuyển đến một điểm cụ thể.
-        ROTATE_TO_ANGLE,  ///< Xoay đến một góc cụ thể.
-        FOLLOW_PATH,      ///< Đi theo một chuỗi các điểm đã định trước.
-        EMERGENCY_STOP    ///< Lệnh dừng khẩn cấp, có độ ưu tiên cao nhất.
+        STOP,               ///< Dừng AGV ngay lập tức.
+        MOVE_TO_POINT,      ///< Di chuyển tiến đến một điểm cụ thể.
+        REVERSE_TO_POINT,   ///< Di chuyển lùi đến một điểm cụ thể.
+        ROTATE_TO_LEFT,     ///< Quay trái tại chỗ.
+        ROTATE_TO_RIGHT,    ///< Quay phải tại chỗ.
+        FOLLOW_PATH,        ///< Đi theo một chuỗi các điểm đã định trước.
+        EMERGENCY_STOP      ///< Lệnh dừng khẩn cấp, có độ ưu tiên cao nhất.
     };
     Type type;            ///< Loại lệnh điều hướng.
     float target_x;       ///< Tọa độ X của điểm đến.
