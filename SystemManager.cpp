@@ -1,10 +1,12 @@
 #include "SystemManager.h"
+#include "Lidarlib/Lidarlib.h"
 #include <sched.h>
 #include <cstring>
 #include <cmath>
 #include <numeric>
 #include <algorithm>
 #include <sstream>
+#include <random> // Required for std::mt19937, std::random_device, std::uniform_int_distribution
 
 /**
  * @brief Hàm khởi tạo của lớp SystemManager.
@@ -94,6 +96,31 @@ bool SystemManager::initialize() {
         }
 
         {
+            ServerComm::AGVPose pose;
+            if (pose_and_vis_queue_.pop(pose)) {
+                status.robot_pose = pose;
+            } else {
+                // Use default/last known pose
+                status.robot_pose = {0, 0, 0, 0, 0};
+            }
+
+            std::vector<ServerComm::Point2D> vis_points;
+            if (vis_points_queue_.pop(vis_points)) {
+                status.visualization_points = std::move(vis_points);
+            }
+
+            // Get realtime LiDAR points
+            std::vector<ServerComm::Point2D> realtime_points;
+            if (realtime_points_queue_.pop(realtime_points)) {
+                std::vector<ServerComm::Point2D> sampled = sampleImportantPoints(realtime_points);
+                status.realtime_lidar_points = std::move(sampled);
+
+                LOG_INFO << "[SystemManager] Sending " << status.realtime_lidar_points.size() 
+                         << " realtime points for mapping";
+            }
+        }
+
+        {
             // Khóa plc_ptr_mutex_ để truy cập con trỏ PLC một cách an toàn.
             std::lock_guard<std::mutex> lock(plc_ptr_mutex_);
             if (plc_ptr_ && plc_ptr_->isConnected()) {
@@ -130,37 +157,37 @@ bool SystemManager::initialize() {
         // }
 
         // Lấy dữ liệu LiDAR realtime cho visualization (nhiều điểm, cập nhật liên tục)
-        std::vector<ServerComm::Point2D> realtime_points;
-        if (realtime_points_queue_.pop(realtime_points)) {
-            // Giới hạn số điểm realtime để không quá tải
-            // const size_t MAX_REALTIME_POINTS = 1000;
-            status.realtime_lidar_points.clear();
+        // std::vector<ServerComm::Point2D> realtime_points;
+        // if (realtime_points_queue_.pop(realtime_points)) {
+        //     // Giới hạn số điểm realtime để không quá tải
+        //     // const size_t MAX_REALTIME_POINTS = 1000;
+        //     status.realtime_lidar_points.clear();
 
-            // Thay vì gửi đi trực tiếp, chúng ta gọi hàm sampling để giảm số lượng điểm
-            std::vector<ServerComm::Point2D> sampled_points = sampleImportantPoints(realtime_points);
+        //     // Thay vì gửi đi trực tiếp, chúng ta gọi hàm sampling để giảm số lượng điểm
+        //     std::vector<ServerComm::Point2D> sampled_points = sampleImportantPoints(realtime_points);
 
-            // Gán các điểm đã được sampling vào gói tin
-            status.realtime_lidar_points = std::move(sampled_points);
-            // for (const auto& p : sampled_points) {
-            //      status.realtime_lidar_points.push_back({p.x, p.y});
-            // }
-            // if (realtime_points.size() > MAX_REALTIME_POINTS) {
-            //     // Lấy mẫu đều để giảm số điểm
-            //     size_t step = realtime_points.size() / MAX_REALTIME_POINTS;
-            //     for (size_t i = 0; i < realtime_points.size(); i += step) {
-            //         status.realtime_lidar_points.push_back({
-            //             realtime_points[i].x, 
-            //             realtime_points[i].y
-            //         });
-            //     }
-            // } else {
-                // for (const auto& p : realtime_points) {
-                //     status.realtime_lidar_points.push_back({p.x, p.y});
-                // }
-                LOG_INFO << "[SystemManager] Sending " << status.realtime_lidar_points.size() 
-                         << " realtime points for mapping";
-            // }
-        }
+        //     // Gán các điểm đã được sampling vào gói tin
+        //     status.realtime_lidar_points = std::move(sampled_points);
+        //     // for (const auto& p : sampled_points) {
+        //     //      status.realtime_lidar_points.push_back({p.x, p.y});
+        //     // }
+        //     // if (realtime_points.size() > MAX_REALTIME_POINTS) {
+        //     //     // Lấy mẫu đều để giảm số điểm
+        //     //     size_t step = realtime_points.size() / MAX_REALTIME_POINTS;
+        //     //     for (size_t i = 0; i < realtime_points.size(); i += step) {
+        //     //         status.realtime_lidar_points.push_back({
+        //     //             realtime_points[i].x, 
+        //     //             realtime_points[i].y
+        //     //         });
+        //     //     }
+        //     // } else {
+        //         // for (const auto& p : realtime_points) {
+        //         //     status.realtime_lidar_points.push_back({p.x, p.y});
+        //         // }
+        //         LOG_INFO << "[SystemManager] Sending " << status.realtime_lidar_points.size() 
+        //                  << " realtime points for mapping";
+        //     // }
+        // }
         // Gán dấu thời gian hiện tại cho gói tin.
         status.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
@@ -523,43 +550,43 @@ void SystemManager::lidar_thread_func() {
         LOG_ERROR << "[LiDAR Thread] Failed to initialize Cartographer";
         return;
     }
+    LOG_INFO << "[LiDAR Thread] Cartographer initialized successfully.";
 
     // Callback xử lý dữ liệu thời gian thực để phát hiện vật cản và điều khiển tốc độ.
-    lidar_processor->setRealtimeCallback([this, &cartographer](const std::vector<LidarPoint>& points) {
-        LOG_INFO         << "[LIDAR Thread] Processed frame. Points: " << points.size();
+    lidar_processor->setRealtimeCallback( [this, &cartographer/*, &lidar_processor*/]  (const std::vector<LidarPoint>& points) {  // ← Đảm bảo dùng Lidarlib::LidarPoint
+        // if (points.empty()) {
+        //     return;
+        // }
+        LOG_INFO << "[LIDAR Thread] Processed frame. Points: " << points.size();
+    
+        // --- Xử lý SLAM và gửi dữ liệu ---
         {
-                // 1. Feed data to Cartographer
-                cartographer->AddSensorData(points);
-                
-                // 2. Get current pose
-                ServerComm::AGVPose pose = cartographer->GetCurrentPose();
-                
-                // 3. Pack minimal data for server
-                // ServerComm::AGVStatusPacket status;
-                // status.robot_pose = {pose.x, pose.y, pose.theta, pose.confidence};
-                
-                // 4. Sample 50 points for visualization
-                std::vector<ServerComm::Point2D> vis_points;
+            cartographer->AddSensorData(points);
+            ServerComm::AGVPose pose = cartographer->GetCurrentPose();
+            
+            // Sample visualization points
+            std::vector<ServerComm::Point2D> vis_points;
+            if (!points.empty()) {
                 size_t step = std::max(size_t(1), points.size() / 50);
                 for (size_t i = 0; i < points.size(); i += step) {
                     vis_points.push_back({points[i].x, points[i].y});
-                    if (vis_points.size() >= 50) break;
                 }
-
-                // 5. Đẩy dữ liệu pose và visualization vào hàng đợi để luồng server gửi đi
-                pose_and_vis_queue_.push(pose);
-                vis_points_queue_.push(vis_points);
-                
-                // 6. Get map update every 5 seconds
-                static auto last_map_time = std::chrono::steady_clock::now();
-                auto now = std::chrono::steady_clock::now();
-                if (std::chrono::duration_cast<std::chrono::seconds>(
-                    now - last_map_time).count() >= 5) {
-                    auto map = cartographer->GetOccupancyGrid();
-                    // Compress and send map delta...
-                    last_map_time = now;
-                }
-        } 
+            }
+            
+            // Update map periodically
+            //static auto last_map_time = std::chrono::steady_clock::now();
+            auto now = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::seconds>(
+                now - last_map_time_).count() >= 2) {
+                cartographer->UpdateMapRealtime();
+                last_map_time_ = now;
+            }
+            
+            // Push to queues
+            pose_and_vis_queue_.push(pose);
+            vis_points_queue_.push(std::move(vis_points));
+        }
+        // --- Kết thúc xử lý SLAM ---
 
         {
         // Đóng gói dữ liệu điểm để gửi đi
@@ -609,10 +636,10 @@ void SystemManager::lidar_thread_func() {
         }
 
         // Chỉ gửi lệnh tốc độ đến PLC nếu giá trị tốc độ thay đổi để giảm tải.
-        static int last_sent_speed = -1;
-        if (smooth_speed != last_sent_speed) {
+        //static int last_sent_speed = -1;
+        if (smooth_speed != last_sent_speed_) {
             plc_command_queue_.push("WRITE_D103_" + std::to_string(smooth_speed));
-            last_sent_speed = smooth_speed;
+            last_sent_speed_ = smooth_speed;
         }
     });
 
@@ -848,7 +875,13 @@ std::vector<ServerComm::Point2D> SystemManager::sampleImportantPoints(const std:
         return {};
     }
 
-   std::vector<ServerComm::Point2D> result;
+     // Thread-local random generators để tránh cạnh tranh tài nguyên giữa các luồng.
+    // 
+    thread_local std::mt19937 rng(std::random_device{}()); // Khởi tạo với seed ngẫu nhiên
+    thread_local std::uniform_int_distribution<int> dist_50(0, 1); // Phân phối để lấy mẫu 50%
+    thread_local std::uniform_int_distribution<int> dist_25(0, 3);// Phân phối để lấy mẫu 25%
+    
+    std::vector<ServerComm::Point2D> result;
     // Dành trước bộ nhớ để tăng hiệu năng, tránh cấp phát lại nhiều lần
     result.reserve(points.size() / 2); // Ước tính kích thước sau khi sampling
 

@@ -128,12 +128,29 @@ private:
     /** @brief Luồng giám sát và đọc dữ liệu từ BMS của pin. */
     void battery_thread_func();
 
-    // --- Các hàm tiện ích ---
-    /** @brief Gửi lệnh khởi tạo đến PLC khi hệ thống bắt đầu. */
+    // --- Các hàm tiện ích (Utility Functions) ---
+    /**
+     * @brief Gửi lệnh khởi tạo đến PLC khi hệ thống bắt đầu.
+     * @details Gửi lệnh `WRITE_D110_1` để báo cho PLC biết rằng phần mềm đã sẵn sàng.
+     * Sử dụng cờ `system_initialized_` để đảm bảo lệnh này chỉ được gửi một lần.
+     */
     void initializeSystem();
-    /** @brief Tính toán tốc độ mục tiêu dựa trên khoảng cách đến vật cản. */
+
+    /**
+     * @brief Tính toán tốc độ mục tiêu dựa trên khoảng cách đến vật cản.
+     * @details Sử dụng hàm ánh xạ tuyến tính theo từng đoạn (piecewise linear mapping) để tạo ra một
+     * đường cong tốc độ mượt mà. Tốc độ tăng dần khi khoảng cách tăng.
+     * @param distance Khoảng cách đến vật cản (cm).
+     * @return Tốc độ mục tiêu (giá trị số nguyên để gửi cho PLC).
+     */
     double calculateSpeed(double distance);
-    /** @brief Tính toán tốc độ mượt mà, có gia tốc và giảm tốc. */
+
+    /**
+     * @brief Tính toán tốc độ di chuyển mượt mà, có gia tốc và giảm tốc.
+     * @param distance_cm Khoảng cách đến vật cản phía trước (cm), dùng để tính `target_speed`.
+     * @param movement_active Cờ cho biết có lệnh di chuyển (tiến/lùi) đang hoạt động hay không.
+     * @return Tốc độ đã được làm mượt để gửi đến PLC.
+     */
     int calculateSmoothSpeed(float distance_cm, bool movement_active);
     /** @brief Phân tích và thực thi một chuỗi lệnh trên PLC. */
     std::string parseAndExecutePlcCommand(const std::string& command, MCProtocol& plc);
@@ -160,12 +177,32 @@ private:
     std::string last_movement_command_; ///< Lưu trữ lệnh di chuyển cuối cùng để có thể tự động tiếp tục.
     std::mutex last_command_mutex_; ///< Mutex để bảo vệ truy cập vào `last_movement_command_`.
 
+    /**
+     * @brief Biến atomic điều khiển vòng lặp chính của tất cả các luồng.
+     * @details Khi được đặt thành `false`, tất cả các luồng sẽ thoát khỏi vòng lặp của chúng và kết thúc một cách an toàn.
+     */
     std::atomic<bool> running_{true}; ///< Biến toàn cục để điều khiển việc dừng tất cả các luồng một cách an toàn.
+
+    /**
+     * @brief Cờ báo hiệu PLC đang ở trạng thái lỗi (ví dụ: D102=5).
+     * @details Được sử dụng để ngăn việc gửi các lệnh mới khi PLC đang báo lỗi.
+     */
     std::atomic<bool> plc_in_error_state_{false}; ///< Cờ báo hiệu PLC đang ở trạng thái lỗi (ví dụ: D102=5).
+
+    /**
+     * @brief Cờ đảm bảo hệ thống chỉ được khởi tạo một lần.
+     * @details Được sử dụng trong `initializeSystem()` để tránh gửi lệnh khởi tạo nhiều lần.
+     */
     std::atomic<bool> system_initialized_{false}; ///< Cờ đảm bảo hệ thống chỉ được khởi tạo một lần.
 
     std::vector<std::thread> threads_; ///< Vector chứa tất cả các luồng đang chạy của hệ thống.
+
+    /** @brief Lấy mẫu các điểm quan trọng từ một tập hợp điểm LiDAR để giảm băng thông. */
     std::vector<ServerComm::Point2D> sampleImportantPoints(const std::vector<ServerComm::Point2D>& points); ///< Lấy mẫu các điểm quan trọng từ tập hợp điểm LiDAR.
+
+    std::atomic<int> last_sent_speed_{-1}; ///< Tốc độ cuối cùng đã gửi cho PLC, dùng để tránh gửi lệnh lặp lại.
+    std::chrono::steady_clock::time_point last_map_time_; ///< Thời điểm cuối cùng bản đồ được cập nhật.
+    std::mutex lidar_callback_mutex_;  ///< Mutex để bảo vệ trạng thái của các callback LiDAR (nếu cần).
 };
 
 #endif // SYSTEM_MANAGER_H

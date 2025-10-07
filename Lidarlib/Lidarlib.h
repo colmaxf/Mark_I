@@ -11,6 +11,7 @@
 #include <thread>
 #include <memory>
 
+#include "cartographer_standalone.h"
 #include "../config/config.h"
 #include "../logger/Logger.h"
 
@@ -130,7 +131,8 @@ private:
     std::unique_ptr<NoiseFilter> noise_filter;
     std::unique_ptr<LidarBuffer> data_buffer;
     std::unique_ptr<RealtimeStabilizer> stabilizer;
-    
+    std::unique_ptr<CartographerStandalone> cartographer_; // SLAM
+        
     // Threading
     std::atomic<bool> is_running;
     std::atomic<bool> is_processing;
