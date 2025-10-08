@@ -61,7 +61,6 @@ struct AGVStatusPacket {
     float current_speed;                    ///< Tốc độ di chuyển hiện tại của AGV.
     std::map<std::string, uint16_t> plc_registers; ///< Dữ liệu các thanh ghi đọc từ PLC.
     AGVPose robot_pose;                     ///< Vị trí và hướng của robot từ Cartographer.
-    std::vector<Point2D> visualization_points; ///< Các điểm LiDAR được lấy mẫu để hiển thị.
     // std::vector<Point2D> stable_lidar_points;    // Dữ liệu chất lượng cao cho Mapping
     std::vector<Point2D> realtime_lidar_points;  // Dữ liệu liên tục cho Visualization
     long timestamp;                         ///< Dấu thời gian khi gói tin được tạo.

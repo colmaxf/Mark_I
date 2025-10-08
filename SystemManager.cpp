@@ -87,10 +87,7 @@ bool SystemManager::initialize() {
             status.is_safe = state_.is_safe_to_move;
             status.plc_connected = state_.plc_connected;
             status.lidar_connected = state_.lidar_connected;
-            // Lấy dữ liệu pose và visualization từ hàng đợi
-            pose_and_vis_queue_.pop(status.robot_pose); // Lấy pose
-            vis_points_queue_.pop(status.visualization_points); // Lấy các điểm visualization
-
+           
             status.battery_connected = state_.battery_connected;
             status.current_speed = static_cast<float>(state_.current_speed);
         }
@@ -104,11 +101,6 @@ bool SystemManager::initialize() {
                 status.robot_pose = {0, 0, 0, 0, 0};
             }
 
-            std::vector<ServerComm::Point2D> vis_points;
-            if (vis_points_queue_.pop(vis_points)) {
-                status.visualization_points = std::move(vis_points);
-            }
-
             // Get realtime LiDAR points
             std::vector<ServerComm::Point2D> realtime_points;
             if (realtime_points_queue_.pop(realtime_points)) {
@@ -116,7 +108,7 @@ bool SystemManager::initialize() {
                 status.realtime_lidar_points = std::move(sampled);
 
                 LOG_INFO << "[SystemManager] Sending " << status.realtime_lidar_points.size() 
-                         << " realtime points for mapping";
+                         << " realtime points for visualization/mapping";
             }
         }
 
@@ -564,14 +556,6 @@ void SystemManager::lidar_thread_func() {
             cartographer->AddSensorData(points);
             ServerComm::AGVPose pose = cartographer->GetCurrentPose();
             
-            // Sample visualization points
-            std::vector<ServerComm::Point2D> vis_points;
-            if (!points.empty()) {
-                size_t step = std::max(size_t(1), points.size() / 50);
-                for (size_t i = 0; i < points.size(); i += step) {
-                    vis_points.push_back({points[i].x, points[i].y});
-                }
-            }
             
             // Update map periodically
             //static auto last_map_time = std::chrono::steady_clock::now();
@@ -584,7 +568,6 @@ void SystemManager::lidar_thread_func() {
             
             // Push to queues
             pose_and_vis_queue_.push(pose);
-            vis_points_queue_.push(std::move(vis_points));
         }
         // --- Kết thúc xử lý SLAM ---
 
