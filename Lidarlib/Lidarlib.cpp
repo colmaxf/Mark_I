@@ -487,7 +487,7 @@ LidarProcessor::LidarProcessor(const string& local_ip, const string& local_port,
     data_buffer = make_unique<LidarBuffer>(100);
     stabilizer = make_unique<RealtimeStabilizer>();
 
-    cartographer_ = std::make_unique<CartographerStandalone>();
+    // cartographer_ = std::make_unique<CartographerStandalone>();
 }
 
 /**
@@ -548,10 +548,10 @@ bool LidarProcessor::initialize() {
         
         LOG_INFO  << "[LIDAR-RT] Initialization successful! LiDAR is responding.";
 
-        if (!cartographer_->Initialize("./config", "agv_config.lua")) {  // Path đến thư mục config và file Lua
-            LOG_ERROR << "[LIDAR] Failed to initialize Cartographer.";
-            return false;
-        }
+        // if (!cartographer_->Initialize("./config", "agv_config.lua")) {  // Path đến thư mục config và file Lua
+        //     LOG_ERROR << "[LIDAR] Failed to initialize Cartographer.";
+        //     return false;
+        // }
         LOG_INFO << "[LIDAR] Cartographer initialized successfully.";
 
         return true;
@@ -685,10 +685,10 @@ void LidarProcessor::processLidarData() {
                 realtime_callback(filtered_points);
             }
             
-            if (cartographer_) {// Cập nhật Cartographer
-                cartographer_->AddSensorData(filtered_points);  // Realtime points
-                cartographer_->UpdateMapRealtime();  // Update map mỗi scan
-            }
+            // if (cartographer_) {// Cập nhật Cartographer
+            //     cartographer_->AddSensorData(filtered_points);  // Realtime points
+            //     cartographer_->UpdateMapRealtime();  // Update map mỗi scan
+            // }
             
             // Scan callback
             if (scan_callback) {

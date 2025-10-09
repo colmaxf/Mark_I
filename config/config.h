@@ -43,7 +43,7 @@
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
-
+#define CARTOGRAPHER_CONFIG_PATH "/home/colmaxf/Documents/Mark_I/config"
 // Khoảng cách an toàn (cm)
 #define SAFE_DISTANCE_CM 200.0f
 // Khoảng cách cảnh báo (cm)

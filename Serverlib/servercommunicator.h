@@ -63,6 +63,15 @@ struct AGVStatusPacket {
     AGVPose robot_pose;                     ///< Vị trí và hướng của robot từ Cartographer.
     // std::vector<Point2D> stable_lidar_points;    // Dữ liệu chất lượng cao cho Mapping
     std::vector<Point2D> realtime_lidar_points;  // Dữ liệu liên tục cho Visualization
+    
+    //Map data
+    std::vector<uint8_t> occupancy_grid_data;  ///< Dữ liệu bản đồ (0=free, 255=occupied)
+    int map_width = 0;                         ///< Chiều rộng map (pixels)
+    int map_height = 0;                        ///< Chiều cao map (pixels)
+    float map_resolution = 0.0f;               ///< Độ phân giải (m/pixel)
+    float map_origin_x = 0.0f;                 ///< Tọa độ X của gốc bản đồ (mét)
+    float map_origin_y = 0.0f;                 ///< Tọa độ Y của gốc bản đồ (mét)
+    
     long timestamp;                         ///< Dấu thời gian khi gói tin được tạo.
 };
 

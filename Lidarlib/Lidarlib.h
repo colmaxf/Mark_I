@@ -131,7 +131,7 @@ private:
     std::unique_ptr<NoiseFilter> noise_filter;
     std::unique_ptr<LidarBuffer> data_buffer;
     std::unique_ptr<RealtimeStabilizer> stabilizer;
-    std::unique_ptr<CartographerStandalone> cartographer_; // SLAM
+    //std::unique_ptr<CartographerStandalone> cartographer_; // SLAM
         
     // Threading
     std::atomic<bool> is_running;

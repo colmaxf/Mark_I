@@ -168,6 +168,8 @@ private:
     boost::lockfree::spsc_queue<std::string, boost::lockfree::capacity<512>> plc_command_queue_;
     /// @brief Hàng đợi không khóa để truyền dữ liệu pose và visualization từ luồng LiDAR đến luồng server.
     boost::lockfree::spsc_queue<ServerComm::AGVPose, boost::lockfree::capacity<128>> pose_and_vis_queue_;
+    /// @brief Hàng đợi không khóa để truyền dữ liệu bản đồ từ luồng LiDAR đến luồng server.
+    boost::lockfree::spsc_queue<CartographerStandalone::GridMap, boost::lockfree::capacity<8>> map_queue_;
     /// @brief Hàng đợi không khóa để nhận kết quả từ luồng PLC.
     boost::lockfree::spsc_queue<std::string, boost::lockfree::capacity<512>> plc_result_queue_;
 

@@ -85,7 +85,13 @@ std::string buildRealtimePacket(
     float current_speed,
     const std::map<std::string, uint16_t>& plc_registers,
     // const std::vector<Point2D>& stable_lidar_points,   
-    const std::vector<Point2D>& realtime_lidar_points,
+    const std::vector<Point2D>& realtime_lidar_points, 
+    const std::vector<uint8_t>& map_data,
+    int map_width,
+    int map_height,
+    float map_resolution,
+    float map_origin_x,
+    float map_origin_y,
     long timestamp) {
     
     std::vector<uint8_t> payload;
@@ -208,6 +214,26 @@ std::string buildRealtimePacket(
         uint32_t net_y = float_to_net(p.y);
         payload.insert(payload.end(), (uint8_t*)&net_x, (uint8_t*)&net_x + 4);
         payload.insert(payload.end(), (uint8_t*)&net_y, (uint8_t*)&net_y + 4);
+    }
+
+    // --- Đóng gói dữ liệu bản đồ ---
+    uint32_t map_data_size = map_data.size();
+    uint32_t net_map_size = htonl(map_data_size);
+    payload.insert(payload.end(), (uint8_t*)&net_map_size, (uint8_t*)&net_map_size + 4);
+
+    if (map_data_size > 0) {
+        uint32_t net_map_width = htonl(map_width);
+        payload.insert(payload.end(), (uint8_t*)&net_map_width, (uint8_t*)&net_map_width + 4);
+        uint32_t net_map_height = htonl(map_height);
+        payload.insert(payload.end(), (uint8_t*)&net_map_height, (uint8_t*)&net_map_height + 4);
+        uint32_t net_map_res = float_to_net(map_resolution);
+        payload.insert(payload.end(), (uint8_t*)&net_map_res, (uint8_t*)&net_map_res + 4);
+        uint32_t net_map_ox = float_to_net(map_origin_x);
+        payload.insert(payload.end(), (uint8_t*)&net_map_ox, (uint8_t*)&net_map_ox + 4);
+        uint32_t net_map_oy = float_to_net(map_origin_y);
+        payload.insert(payload.end(), (uint8_t*)&net_map_oy, (uint8_t*)&net_map_oy + 4);
+
+        payload.insert(payload.end(), map_data.begin(), map_data.end());
     }
 
     // --- Xây dựng header của gói tin ---
@@ -369,7 +395,13 @@ void CommunicationServer::sendStatus(const AGVStatusPacket& status) {
         status.current_speed,
         status.plc_registers,
         // status.stable_lidar_points,    // Dữ liệu stable
-        status.realtime_lidar_points,  // Dữ liệu realtime       
+        status.realtime_lidar_points,  // Dữ liệu realtime
+        status.occupancy_grid_data,
+        status.map_width,
+        status.map_height,
+        status.map_resolution,
+        status.map_origin_x,
+        status.map_origin_y,
         status.timestamp
     );
     

@@ -181,7 +181,21 @@ bool SystemManager::initialize() {
         //     // }
         // }
         // Gán dấu thời gian hiện tại cho gói tin.
-        status.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        // Lấy bản đồ từ hàng đợi (nếu có)
+        CartographerStandalone::GridMap grid_map;
+        if (map_queue_.pop(grid_map)) {
+            status.map_width = grid_map.width;
+            status.map_height = grid_map.height;
+            status.map_resolution = grid_map.resolution;
+            status.map_origin_x = grid_map.origin_x;
+            status.map_origin_y = grid_map.origin_y;
+            status.occupancy_grid_data = std::move(grid_map.data);
+        
+
+            LOG_INFO << "[SystemManager] Sending map: " << grid_map.width << "x" << grid_map.height << " (" << grid_map.data.size() << " bytes)";
+        
+        }
+            status.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
 
         // --- LOG dữ liệu gửi lên server ---
@@ -537,15 +551,16 @@ void SystemManager::lidar_thread_func() {
     }
 
     // Khởi tạo Cartographer
-    auto cartographer = std::make_unique<CartographerStandalone>();
-    if (!cartographer->Initialize("./config", "agv_config.lua")) {
+    auto cartographer = std::make_shared<CartographerStandalone>();
+    //Sử dụng đường dẫn tuyệt đối để đảm bảo dịch vụ systemd tìm thấy tệp cấu hình.
+    if (!cartographer->Initialize(CARTOGRAPHER_CONFIG_PATH, "agv_config.lua")) {
         LOG_ERROR << "[LiDAR Thread] Failed to initialize Cartographer";
         return;
     }
     LOG_INFO << "[LiDAR Thread] Cartographer initialized successfully.";
 
     // Callback xử lý dữ liệu thời gian thực để phát hiện vật cản và điều khiển tốc độ.
-    lidar_processor->setRealtimeCallback( [this, &cartographer/*, &lidar_processor*/]  (const std::vector<LidarPoint>& points) {  // ← Đảm bảo dùng Lidarlib::LidarPoint
+    lidar_processor->setRealtimeCallback( [this, cartographer]  (const std::vector<LidarPoint>& points) {  // Capture cartographer by value (shared_ptr)
         // if (points.empty()) {
         //     return;
         // }
@@ -564,6 +579,10 @@ void SystemManager::lidar_thread_func() {
                 now - last_map_time_).count() >= 2) {
                 cartographer->UpdateMapRealtime();
                 last_map_time_ = now;
+
+                // Lấy bản đồ mới nhất và đẩy vào hàng đợi
+                auto grid_map = cartographer->GetOccupancyGrid();
+                map_queue_.push(grid_map);
             }
             
             // Push to queues

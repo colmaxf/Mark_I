@@ -293,9 +293,9 @@ void CartographerStandalone::LoadOptions(const std::string& configuration_direct
     cartographer::common::LuaParameterDictionary lua_parameter_dictionary(
         code, std::move(file_resolver));
     map_builder_options_ = cartographer::mapping::CreateMapBuilderOptions(
-        lua_parameter_dictionary.GetDictionary("map_builder").get());
+        lua_parameter_dictionary.GetDictionary("MAP_BUILDER").get());
     trajectory_options_ = cartographer::mapping::CreateTrajectoryBuilderOptions(
-        lua_parameter_dictionary.GetDictionary("trajectory_builder").get());
+        lua_parameter_dictionary.GetDictionary("TRAJECTORY_BUILDER").get());
 }
 
 /**
