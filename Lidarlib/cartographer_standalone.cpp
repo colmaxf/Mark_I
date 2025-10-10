@@ -39,6 +39,7 @@ CartographerStandalone::~CartographerStandalone() {
 bool CartographerStandalone::Initialize(
     const std::string& configuration_directory,
     const std::string& configuration_basename) {
+        LOG_INFO << "[Cartographer] Initializing..." ;
     
     // Load configuration from Lua file
     LoadOptions(configuration_directory, configuration_basename);
@@ -84,6 +85,8 @@ bool CartographerStandalone::Initialize(
  * @param scan_points Vector chứa các điểm LiDAR thô từ một lần quét.
  */
 void CartographerStandalone::AddSensorData(const std::vector<LidarPoint>& scan_points) {
+    LOG_INFO << "[Cartographer] Adding sensor data. Points: " << scan_points.size();
+
     if (scan_points.empty()) return;
     
     // Convert to Cartographer format (với timestamp từ LidarPoint, intensity real)
@@ -166,6 +169,7 @@ CartographerStandalone::ConvertToPointCloud(const std::vector<LidarPoint>& scan_
  *    Sử dụng `std::max` để hợp nhất, đảm bảo giá trị xác suất chiếm dụng cao nhất được giữ lại.
  */
 void CartographerStandalone::UpdateOccupancyGrid() {
+    LOG_INFO << "[Cartographer] Updating occupancy grid map...";
     // Get all submaps
     auto all_submaps = map_builder_->pose_graph()->GetAllSubmapData();
     if (all_submaps.empty()) return;
@@ -287,6 +291,7 @@ std::vector<uint8_t> CartographerStandalone::SerializeGridToBytes(const GridMap&
  */
 void CartographerStandalone::LoadOptions(const std::string& configuration_directory,
                                         const std::string& configuration_basename) {
+    LOG_INFO << "[Cartographer] Loading options...";
     auto file_resolver = std::make_unique<cartographer::common::ConfigurationFileResolver>(
         std::vector<std::string>{configuration_directory});
     const std::string code = file_resolver->GetFileContentOrDie(configuration_basename);
@@ -304,6 +309,7 @@ void CartographerStandalone::LoadOptions(const std::string& configuration_direct
  * @return `true` nếu lưu thành công.
  */
 bool CartographerStandalone::SaveMap(const std::string& filename) {
+    LOG_INFO << "[Cartographer] Saving map..." << filename;
     cartographer::io::ProtoStreamWriter writer(filename);
     map_builder_->SerializeState(false, &writer);  // false = không include unfinished submaps
     return true;
@@ -315,6 +321,7 @@ bool CartographerStandalone::SaveMap(const std::string& filename) {
  * @return `true` nếu tải thành công.
  */
 bool CartographerStandalone::LoadMap(const std::string& filename) {
+    LOG_INFO << "[Cartographer] Loading map..." << filename;
     cartographer::io::ProtoStreamReader reader(filename);
     
     map_builder_->LoadState(&reader, true);  // true = load frozen state

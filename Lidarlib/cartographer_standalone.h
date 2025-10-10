@@ -18,6 +18,7 @@
 
 //#include "Lidarlib.h"
 #include "../Serverlib/servercommunicator.h"
+#include "../logger/Logger.h"
 
 
 struct LidarPoint;  // Forward decl: Compiler biết type tồn tại, không cần full def ở header

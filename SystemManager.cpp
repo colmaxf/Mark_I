@@ -571,6 +571,7 @@ void SystemManager::lidar_thread_func() {
             cartographer->AddSensorData(points);
             ServerComm::AGVPose pose = cartographer->GetCurrentPose();
             
+        LOG_INFO << "[LIDAR Thread] Current Pose - X: " << pose.x << " Y: " << pose.y << " Theta: " << pose.theta;
             
             // Update map periodically
             //static auto last_map_time = std::chrono::steady_clock::now();
@@ -582,6 +583,9 @@ void SystemManager::lidar_thread_func() {
 
                 // Lấy bản đồ mới nhất và đẩy vào hàng đợi
                 auto grid_map = cartographer->GetOccupancyGrid();
+                LOG_INFO << "[LIDAR Thread] New map generated. Size: " 
+                         << grid_map.width << "x" << grid_map.height 
+                         << " (" << grid_map.data.size() << " bytes)";
                 map_queue_.push(grid_map);
             }
             
