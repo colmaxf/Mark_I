@@ -99,23 +99,23 @@ bool SystemManager::initialize() {
                 try {
                     // Đọc nhiều thanh ghi PLC cùng lúc để tăng hiệu quả giao tiếp.
                     // Đọc một khối từ D100 đến D200 (101 thanh ghi).
-                    auto regs = plc_ptr_->readWords("D", 100, 101); // Read D100 to D200
-                    // Kiểm tra xem có đọc đủ số lượng thanh ghi không trước khi truy cập.
-                    if (regs.size() >= 101) {
-                        status.plc_registers["D100"] = regs[0];
-                        status.plc_registers["D101"] = regs[1];
-                        status.plc_registers["D102"] = regs[2];
-                        status.plc_registers["D103"] = regs[3];
-                        status.plc_registers["D110"] = regs[10];
-                        status.plc_registers["D200"] = regs[100];
-                    }
+                    // auto regs = plc_ptr_->readWords("D", 100, 101); // Read D100 to D200
+                    //// // Kiểm tra xem có đọc đủ số lượng thanh ghi không trước khi truy cập.
+                    // if (regs.size() >= 101) {
+                    //     status.plc_registers["D100"] = regs[0];
+                    //     status.plc_registers["D101"] = regs[1];
+                    //     status.plc_registers["D102"] = regs[2];
+                    //     status.plc_registers["D103"] = regs[3];
+                    //     status.plc_registers["D110"] = regs[10];
+                    //     status.plc_registers["D200"] = regs[100];
+                    // }
                     //--------Đọc từng thanh ghi riêng lẻ (không hiệu quả)--------
-                    // status.plc_registers["D100"] = plc_ptr_->readWord("D", 100);
-                    // status.plc_registers["D101"] = plc_ptr_->readWord("D", 101);
-                    // status.plc_registers["D102"] = plc_ptr_->readWord("D", 102);
-                    // status.plc_registers["D103"] = plc_ptr_->readWord("D", 103);
-                    // status.plc_registers["D110"] = plc_ptr_->readWord("D", 110);
-                    // status.plc_registers["D200"] = plc_ptr_->readWord("D", 200);
+                    status.plc_registers["D100"] = plc_ptr_->readSingleWord("D", 100);
+                    status.plc_registers["D101"] = plc_ptr_->readSingleWord("D", 101);
+                    status.plc_registers["D102"] = plc_ptr_->readSingleWord("D", 102);
+                    status.plc_registers["D103"] = plc_ptr_->readSingleWord("D", 103);
+                    status.plc_registers["D110"] = plc_ptr_->readSingleWord("D", 110);
+                    status.plc_registers["D200"] = plc_ptr_->readSingleWord("D", 200);
                     //-------------------------------------------------------------
 
                 } catch (const std::exception& e) {
@@ -736,15 +736,13 @@ void SystemManager::command_handler_thread() {
             // TODO: Triển khai logic cho FOLLOW_PATH nếu cần.
             switch (cmd.type) {
                 // Các lệnh di chuyển tiến.
-                case ServerComm::NavigationCommand::MOVE_TO_POINT:
-                case ServerComm::NavigationCommand::REVERSE_TO_POINT: {
+                case ServerComm::NavigationCommand::MOVE_TO_POINT:{
                     // Tạo lệnh di chuyển.
-                    std::string move_cmd =  cmd.type == ServerComm::NavigationCommand::MOVE_TO_POINT ? "WRITE_D100_1" : "WRITE_D100_2";
-                    LOG_INFO << "[Command Handler] Processing movement command: " << move_cmd;
+                    LOG_INFO << "[Command Handler] Processing movement command: WRITE_D100_1";
                     // Lưu lại lệnh di chuyển cuối cùng để có thể tự động tiếp tục.
                     {
                         std::lock_guard<std::mutex> lock(last_command_mutex_);
-                        last_movement_command_ = move_cmd;
+                        last_movement_command_ = "WRITE_D100_1";
                     }
                     // Chỉ thực hiện nếu an toàn.
                     if (is_safe) {
@@ -753,10 +751,28 @@ void SystemManager::command_handler_thread() {
                         state_.movement_command_active = true;
                         state_.is_moving = false;
                         plc_command_queue_.push("WRITE_D101_0");
-                        plc_command_queue_.push(move_cmd);
+                        plc_command_queue_.push("WRITE_D100_1");
                     } else {
                         LOG_WARNING << "Cannot execute movement - obstacle detected!";
                     }
+                    break;
+                }
+                case ServerComm::NavigationCommand::REVERSE_TO_POINT: {
+                    // Tạo lệnh di chuyển.
+                    
+                    LOG_INFO << "[Command Handler] Processing movement command: WRITE_D100_2" ;
+                    // Lưu lại lệnh di chuyển cuối cùng để có thể tự động tiếp tục.
+                    {
+                        std::lock_guard<std::mutex> lock(last_command_mutex_);
+                        last_movement_command_ = "WRITE_D100_2";
+                    }
+                        LOG_INFO << "Executing movement command from server.";
+                        std::lock_guard<std::mutex> lock(state_.state_mutex);
+                        state_.movement_command_active = true;
+                        state_.is_moving = false;
+                        plc_command_queue_.push("WRITE_D101_0");
+                        plc_command_queue_.push("WRITE_D100_2");
+
                     break;
                 }
                 // Lệnh xoay.
