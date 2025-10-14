@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <termios.h>
+#include <errno.h>
 
 /// @brief Con trỏ duy nhất đến thực thể của lớp Singleton.
 std::unique_ptr<JBDBMSSingleton> JBDBMSSingleton::instance = nullptr;
@@ -52,9 +53,9 @@ bool JBDBMSSingleton::initialize() {
     }
     
     // Open serial port
-    serialPort = open(portName.c_str(), O_RDWR | O_NOCTTY | O_NDELAY);
+    serialPort = open(portName.c_str(), O_RDWR | O_NOCTTY);
     if (serialPort < 0) {
-       LOG_WARNING << "Cannot open serial port: " << portName ;
+       LOG_WARNING << "[BMS] Cannot open serial port: " << portName ;
         return false;
     }
     
@@ -87,7 +88,7 @@ bool JBDBMSSingleton::initialize() {
     
     // Timeout settings
     options.c_cc[VMIN] = 0;
-    options.c_cc[VTIME] = 10;  // 1 second timeout
+    options.c_cc[VTIME] = 20;  // 1 second timeout
     
     tcsetattr(serialPort, TCSANOW, &options);
     
@@ -95,7 +96,7 @@ bool JBDBMSSingleton::initialize() {
     tcflush(serialPort, TCIOFLUSH);
     
     isConnected = true;
-    LOG_INFO << "Connected to BMS via " << portName ;
+    LOG_INFO << "[BMS] Connected to BMS via " << portName ;
     return true;
 }
 
@@ -119,27 +120,27 @@ void JBDBMSSingleton::closeSerial() {
  */
 bool JBDBMSSingleton::updateBatteryData() {
     if (!isConnected || serialPort < 0) {
-        LOG_WARNING << "BMS is not connected" ;
+        LOG_WARNING << "[BMS] BMS is not connected" ;
         return false;
     }
     
     // Initialize communication
-    if (!writeRequestStart() || !writeRequestEnd()) {
-        return false;
-    }
-    if (!writeRequestStart() || !writeRequestEnd()) {
-        return false;
-    }
+    // if (!writeRequestStart() || !writeRequestEnd()) {
+    //     return false;
+    // }
+    // if (!writeRequestStart() || !writeRequestEnd()) {
+    //     return false;
+    // }
     
     // Read cell voltages
     if (!readCellVoltages()) {
-        LOG_WARNING << "Failed to read cell voltages" ;
+        LOG_WARNING << "[BMS] Failed to read cell voltages" ;
         return false;
     }
     
     // Read basic information
     if (!readBasicInfo()) {
-        LOG_WARNING << "Failed to read basic info" ;
+        LOG_WARNING << "[BMS] Failed to read basic info" ;
         return false;
     }
     
@@ -312,32 +313,32 @@ void JBDBMSSingleton::printBatteryInfo() const {
     LOG_INFO << std::fixed << std::setprecision(3);
     
     // Pack info
-    LOG_INFO << "Pack Voltage: " << batteryData.packVoltage << "V" ;
-    LOG_INFO << "Pack Current: " << batteryData.packCurrent << "A" ;
-    LOG_INFO << "Pack Power: " << batteryData.packPower << "W" ;
-    LOG_INFO << "Remaining Capacity: " << batteryData.remainingCapacity << "Ah" ;
-    LOG_INFO << "State of Charge: " << batteryData.stateOfCharge << "%" ;
-    LOG_INFO << "Cycle Count: " << batteryData.cycleCount ;
-    LOG_INFO << "Temperature 1: " << batteryData.temperature1 << "°C" ;
-    LOG_INFO << "Temperature 2: " << batteryData.temperature2 << "°C" ;
+    LOG_INFO << "[BMS] Pack Voltage: " << batteryData.packVoltage << "V" ;
+    LOG_INFO << "[BMS] Pack Current: " << batteryData.packCurrent << "A" ;
+    LOG_INFO << "[BMS] Pack Power: " << batteryData.packPower << "W" ;
+    LOG_INFO << "[BMS] Remaining Capacity: " << batteryData.remainingCapacity << "Ah" ;
+    LOG_INFO << "[BMS] State of Charge: " << batteryData.stateOfCharge << "%" ;
+    LOG_INFO << "[BMS] Cycle Count: " << batteryData.cycleCount ;
+    LOG_INFO << "[BMS] Temperature 1: " << batteryData.temperature1 << "°C" ;
+    LOG_INFO << "[BMS] Temperature 2: " << batteryData.temperature2 << "°C" ;
     
     // MOSFET status
-    LOG_INFO << "Charge FET: " << (batteryData.chargeFet ? "ON" : "OFF") ;
-    LOG_INFO << "Discharge FET: " << (batteryData.dischargeFet ? "ON" : "OFF") ;
+    LOG_INFO << "[BMS] Charge FET: " << (batteryData.chargeFet ? "ON" : "OFF") ;
+    LOG_INFO << "[BMS] Discharge FET: " << (batteryData.dischargeFet ? "ON" : "OFF") ;
     
     // Cell information
     LOG_INFO << "\n--- Cell Information ---" ;
-    LOG_INFO << "Number of Cells: " << batteryData.numCells ;
+    LOG_INFO << "[BMS] Number of Cells: " << batteryData.numCells ;
     for (int i = 0; i < batteryData.numCells; i++) {
-        LOG_INFO << "Cell " << (i+1) << ": " << batteryData.cellVoltages[i] << "V";
+        LOG_INFO << "[BMS] Cell " << (i+1) << ": " << batteryData.cellVoltages[i] << "V";
         if (batteryData.balancerStates[i]) LOG_INFO << " (Balancing)";
         LOG_INFO ;
     }
     
-    LOG_INFO << "Cell Max: " << batteryData.cellMax << "V" ;
-    LOG_INFO << "Cell Min: " << batteryData.cellMin << "V" ;
-    LOG_INFO << "Cell Average: " << batteryData.cellAverage << "V" ;
-    LOG_INFO << "Cell Difference: " << batteryData.cellDifference << "V" ;
+    LOG_INFO << "[BMS] Cell Max: " << batteryData.cellMax << "V" ;
+    LOG_INFO << "[BMS] Cell Min: " << batteryData.cellMin << "V" ;
+    LOG_INFO << "[BMS] Cell Average: " << batteryData.cellAverage << "V" ;
+    LOG_INFO << "[BMS] Cell Difference: " << batteryData.cellDifference << "V" ;
     
     // Protection status
     LOG_INFO << "\n--- Protection Status ---" ;
@@ -355,9 +356,9 @@ void JBDBMSSingleton::printBatteryInfo() const {
     if (batteryData.dischargeOvercurrent) LOG_INFO << "  Discharge Overcurrent" ;
     
     if (!hasAnyProtection()) {
-        if (batteryData.packCurrent > 0.1f) LOG_INFO << "✅ Status: Charging" ;
-        else if (batteryData.packCurrent < -0.1f) LOG_INFO << "✅ Status: Discharging" ;
-        else LOG_INFO << "✅ Status: Idle" ;
+        if (batteryData.packCurrent > 0.1f) LOG_INFO << " Status: Charging" ;
+        else if (batteryData.packCurrent < -0.1f) LOG_INFO << "Status: Discharging" ;
+        else LOG_INFO << "Status: Idle" ;
     }
     
     LOG_INFO << "=================================" ;
@@ -410,9 +411,8 @@ uint8_t JBDBMSSingleton::reverseBits(uint8_t byte) {
  * @details Chờ một khoảng thời gian ngắn trước và sau khi xóa để đảm bảo hoạt động ổn định.
  */
 void JBDBMSSingleton::flushSerial() {
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    tcflush(serialPort, TCIOFLUSH);
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    tcflush(serialPort, TCIFLUSH);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
 }
 
 /**
@@ -421,9 +421,21 @@ void JBDBMSSingleton::flushSerial() {
  * @return `true` nếu gửi thành công, `false` nếu thất bại.
  */
 bool JBDBMSSingleton::writeCommand(const std::vector<uint8_t>& data) {
-    flushSerial();
+    //
+    tcflush(serialPort, TCIFLUSH);
+    
     ssize_t bytesWritten = write(serialPort, data.data(), data.size());
-    return bytesWritten == static_cast<ssize_t>(data.size());
+    
+    if (bytesWritten != static_cast<ssize_t>(data.size())) {
+        LOG_WARNING << "[BMS] Write failed: sent " << bytesWritten << "/" << data.size() << " bytes";
+        return false;
+    }
+    
+    // Đảm bảo dữ liệu được gửi hoàn toàn
+    tcdrain(serialPort);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    
+    return true;
 }
 
 /**
@@ -586,17 +598,90 @@ bool JBDBMSSingleton::readBasicInfo() {
  */
 bool JBDBMSSingleton::getBMSResponse(std::vector<uint8_t>& response) {
     response.clear();
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+const int MAX_RETRIES = 3;  // Retry 3 lần
     
-    uint8_t buffer[256];
-    ssize_t bytesRead = read(serialPort, buffer, sizeof(buffer));
-    
-    if (bytesRead <= 0) {
-        return false;
+    for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        if (attempt > 0) {
+            LOG_INFO << "[BMS] Retry attempt " << attempt + 1 << "/" << MAX_RETRIES;
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        
+        uint8_t buffer[256];
+        ssize_t totalBytes = 0;
+        
+        // Đọc với timeout thông minh
+        auto startTime = std::chrono::steady_clock::now();
+        const int TIMEOUT_MS = 500;
+        
+        while (totalBytes < 256) {
+            ssize_t bytesRead = read(serialPort, buffer + totalBytes, 
+                                     sizeof(buffer) - totalBytes);
+            
+            if (bytesRead > 0) {
+                totalBytes += bytesRead;
+                
+                //  Kiểm tra đã đủ frame chưa
+                if (totalBytes >= 4) {
+                    int expectedLength = 4 + buffer[3] + 3;
+                    if (totalBytes >= expectedLength) {
+                        break;
+                    }
+                }
+            } else if (bytesRead < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                LOG_WARNING << "[BMS] Read error: " << strerror(errno);
+                break;
+            }
+            
+            // ✅ Kiểm tra timeout
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - startTime).count();
+            if (elapsed > TIMEOUT_MS) {
+                LOG_WARNING << "[BMS]  Read timeout after " << elapsed << "ms";
+                break;
+            }
+            
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        
+        if (totalBytes <= 0) {
+            LOG_WARNING << "[BMS]  No data received (attempt " << attempt + 1 << ")";
+            continue;  //  Thử lại
+        }
+        
+        response.assign(buffer, buffer + totalBytes);
+        
+        // KIỂM TRA FRAME VALIDITY
+        if (response[0] != 0xDD) {
+            LOG_WARNING << "[BMS] Invalid start byte: 0x" << std::hex 
+                       << static_cast<int>(response[0]) << std::dec;
+            continue;
+        }
+        
+        if (response.size() < 7) {
+            LOG_WARNING << "[BMS] Response too short: " << response.size() << " bytes";
+            continue;
+        }
+        
+        if (response[response.size() - 1] != 0x77) {
+            LOG_WARNING << "[BMS] Invalid end byte: 0x" << std::hex 
+                       << static_cast<int>(response[response.size() - 1]) << std::dec;
+            continue;
+        }
+        
+        if (response[2] != 0x00) {
+            LOG_WARNING << "[BMS] BMS error status: 0x" << std::hex 
+                       << static_cast<int>(response[2]) << std::dec;
+            continue;
+        }
+        
+        //  Thành công!
+        LOG_INFO << "[BMS] Successfully received " << totalBytes << " bytes";
+        return true;
     }
     
-    response.assign(buffer, buffer + bytesRead);
-    return true;
+    LOG_WARNING << "[BMS] Failed to get valid response after " << MAX_RETRIES << " attempts";
+    return false;
 }
 
 /**
@@ -621,11 +706,11 @@ void demonstrateUsage() {
     
     // Initialize connection
     if (!bms.initialize()) {
-        LOG_WARNING << "Không thể khởi tạo kết nối BMS" ;
+        LOG_WARNING << "[BMS] Không thể khởi tạo kết nối BMS" ;
         return;
     }
     
-    LOG_INFO << "JBD BMS Singleton Reader started." ;
+    LOG_INFO << "[BMS] JBD BMS Singleton Reader started." ;
     
     // Read data in loop
     for (int i = 0; i < 5; i++) {
@@ -635,13 +720,13 @@ void demonstrateUsage() {
             
             // Or get specific data
             LOG_INFO << "\n--- Quick Status ---" ;
-            LOG_INFO << "Voltage: " << bms.getPackVoltage() << "V" ;
-            LOG_INFO << "Current: " << bms.getPackCurrent() << "A" ;
-            LOG_INFO << "SOC: " << bms.getStateOfCharge() << "%" ;
-            LOG_INFO << "Temperature: " << bms.getTemperature1() << "°C" ;
-            LOG_INFO << "Protection: " << bms.getProtectionStateText() ;
+            LOG_INFO << "[BMS] Voltage: " << bms.getPackVoltage() << "V" ;
+            LOG_INFO << "[BMS] Current: " << bms.getPackCurrent() << "A" ;
+            LOG_INFO << "[BMS] SOC: " << bms.getStateOfCharge() << "%" ;
+            LOG_INFO << "[BMS] Temperature: " << bms.getTemperature1() << "°C" ;
+            LOG_INFO << "[BMS] Protection: " << bms.getProtectionStateText() ;
         } else {
-            LOG_WARNING << "Không thể đọc dữ liệu BMS" ;
+            LOG_WARNING << "[BMS] Không thể đọc dữ liệu BMS" ;
         }
         
         std::this_thread::sleep_for(std::chrono::seconds(3));
