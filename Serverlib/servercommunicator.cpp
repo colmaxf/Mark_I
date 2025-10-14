@@ -100,12 +100,13 @@ std::string buildRealtimePacket(
     payload.insert(payload.end(), (uint8_t*)&net_battery, (uint8_t*)&net_battery + 4);
     
     // Đóng gói các cờ trạng thái boolean vào một byte duy nhất
+    //
     uint8_t status_flags = 0;
-    if (is_moving) status_flags |= 0x01;
-    if (is_safe) status_flags |= 0x02;
-    if (plc_connected) status_flags |= 0x04;
-    if (lidar_connected) status_flags |= 0x08;
-    if (battery_connected) status_flags |= 0x10;
+    if (is_moving) status_flags |= 0x01; // Bit 0
+    if (is_safe) status_flags |= 0x02;   // Bit 1
+    if (plc_connected) status_flags |= 0x04;    // Bit 2
+    if (lidar_connected) status_flags |= 0x08;  // Bit 3
+    if (battery_connected) status_flags |= 0x10;        // Bit 4
     payload.push_back(status_flags);
     
     // Đóng gói tốc độ
