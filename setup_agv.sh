@@ -191,7 +191,7 @@ After=dlt-logger.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/chmod 777 /tmp/dlt
+ExecStart=/bin/mkdir -p /tmp/dlt && /bin/chmod 777 /tmp/dlt
 RemainAfterExit=true
 
 [Install]
@@ -207,7 +207,7 @@ cat > /etc/systemd/system/control_system_agv.service << EOF
 [Unit]
 Description=My C++ Application Service AGV
 After=dlt-permissions.service
-Requires=dlt-permissions.service
+Wants=dlt-permissions.service
 
 [Service]
 ExecStart=/usr/local/bin/control_system
