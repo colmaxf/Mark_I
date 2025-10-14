@@ -17,8 +17,8 @@ echo "===================================================="
 
 # Tạo thư mục cần thiết
 echo "--> Tạo thư mục /usr/local/bin và /var/log/dlt..."
-mkdir -p /usr/local/bin
-mkdir -p /var/log/dlt
+sudo mkdir -p /usr/local/bin
+sudo mkdir -p /var/log/dlt
 
 # 1. Tệp /etc/dlt.conf
 echo "--> Tạo tệp /etc/dlt.conf..."
@@ -98,15 +98,12 @@ cleanup_old() {
 # Trap signals để cleanup properly
 trap "kill $PID 2>/dev/null; exit 0" SIGTERM SIGINT
 
-start_logging() {
-    LOG_FILE="$LOG_DIR/agv_$(date +%Y%m%d_%H%M%S).dlt"
-    echo "Bắt đầu ghi log vào: $LOG_FILE"
-    # Start logging với timeout 24 giờ (86400 giây)
-    timeout 86400 dlt-receive -a localhost -o "$LOG_FILE" &
-    PID=$!
-}
+LOG_FILE="$LOG_DIR/agv_$(date +%Y%m%d_%H%M%S).dlt"
+echo "Logging to: $LOG_FILE"
 
-start_logging
+# Start logging với timeout
+timeout 86400 dlt-receive -a localhost -o "$LOG_FILE" &
+PID=$!
 
 # Monitor với error handling
 while kill -0 $PID 2>/dev/null; do
@@ -115,22 +112,24 @@ while kill -0 $PID 2>/dev/null; do
         MAX=$((MAX_SIZE_MB * 1024 * 1024))
         
         if [ $SIZE -gt $MAX ]; then
-            echo "Log file reached maximum size. Rotating log..."
             kill $PID 2>/dev/null
             wait $PID 2>/dev/null
             cleanup_old
-
+            
             # Check retry count
             if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
-            echo "Maximum retry count reached, exiting."
-            exit 1
+                echo "Max retries reached, exiting"
+                exit 1
             fi
-
+            
+            LOG_FILE="$LOG_DIR/agv_$(date +%Y%m%d_%H%M%S).dlt"
+            timeout 86400 dlt-receive -a localhost -o "$LOG_FILE" &
+            PID=$!
             RETRY_COUNT=$((RETRY_COUNT + 1))
-            start_logging
+            echo "Rotated to: $LOG_FILE (retry: $RETRY_COUNT)"
         fi
     fi
-    sleep 60  # Kiểm tra mỗi 60 giây
+    sleep 60  # Tăng lên 60s để giảm tải CPU
 done
 EOF
 
@@ -192,7 +191,7 @@ After=dlt-logger.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/chmod 777 /tmp/dlt
+ExecStart=/bin/mkdir -p /tmp/dlt && /bin/chmod 777 /tmp/dlt
 RemainAfterExit=true
 
 [Install]
@@ -208,7 +207,7 @@ cat > /etc/systemd/system/control_system_agv.service << EOF
 [Unit]
 Description=My C++ Application Service AGV
 After=dlt-permissions.service
-Requires=dlt-permissions.service
+Wants=dlt-permissions.service
 
 [Service]
 ExecStart=/usr/local/bin/control_system
@@ -225,8 +224,8 @@ EOF
 echo "===================================================="
 # --- Bước 2: Cấp quyền thực thi ---
 echo ">> Bước 2: Cấp quyền thực thi 777 cho các script..."
-chmod 777 /usr/local/bin/dlt-auto-logger.sh
-chmod 777 /usr/local/bin/dlt-view-logs.sh
+sudo chmod 755 /usr/local/bin/dlt-auto-logger.sh
+sudo chmod 755 /usr/local/bin/dlt-view-logs.sh
 echo "OK"
 echo "===================================================="
 

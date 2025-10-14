@@ -3,7 +3,7 @@
 
 
 //===================== Cấu hình hệ thống ==================---//
-#define AGV_ID 2
+#define AGV_ID 1
 
 #if AGV_ID == 1
     //Config AGV 1
@@ -30,7 +30,7 @@
     #define LIDAR_CLIENT_PORT 2368
 #endif
 //----------------------Server--------------------------------//
-#define SERVER_IP "100.93.107.119"  // IP của server
+#define SERVER_IP "100.93.107.30"  // IP của server
 #define SERVER_PORT 8080           // Port của server
 #define COMM_SEND_INTERVAL_MS 200 // Gửi status mỗi 200ms
 //----------------------------------------------------//
@@ -43,7 +43,9 @@
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
-
+// Thời gian chờ kết nối lại LiDAR (giây)
+#define LIDAR_RECONNECT_DELAY_SECONDS 2
+#define MAX_RECONNECT_ATTEMPTS 5
 // Khoảng cách an toàn (cm)
 #define SAFE_DISTANCE_CM 200.0f
 // Khoảng cách cảnh báo (cm)

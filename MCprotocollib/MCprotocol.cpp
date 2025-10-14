@@ -105,6 +105,7 @@ void MCProtocol::disconnect() {
 }
 
 std::vector<uint16_t> MCProtocol::readWords(const std::string& device, uint32_t start_addr, uint16_t count) {
+    LOG_INFO << "[MCProtocol] Reading words from " << device << start_addr;
     
     std::lock_guard<std::mutex> lock(m_socket_mutex);
     
@@ -207,6 +208,7 @@ std::vector<uint16_t> MCProtocol::readWords(const std::string& device, uint32_t 
 }
 
 bool MCProtocol::writeWords(const std::string& device, uint32_t start_addr, const std::vector<uint16_t>& values) {
+    LOG_INFO << "[MCProtocol] Writing words to " << device << start_addr;
     
     std::lock_guard<std::mutex> lock(m_socket_mutex);
     
@@ -282,6 +284,7 @@ bool MCProtocol::writeWords(const std::string& device, uint32_t start_addr, cons
 }
 
 std::vector<uint16_t> MCProtocol::readBits(const std::string& device, uint32_t start_addr, uint16_t word_count) {
+    LOG_INFO << "[MCProtocol] Reading bits from " << device << start_addr;
     
     std::lock_guard<std::mutex> lock(m_socket_mutex);
     
@@ -363,6 +366,7 @@ std::vector<uint16_t> MCProtocol::readBits(const std::string& device, uint32_t s
 }
 
 uint16_t MCProtocol::readSingleWord(const std::string& device, uint32_t addr) {
+    LOG_INFO << "[MCProtocol] Reading single word from " << device << addr;
     auto result = readWords(device, addr, 1);
     return result[0];
 }

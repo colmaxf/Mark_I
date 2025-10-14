@@ -104,7 +104,7 @@ private:
     mutable std::mutex stabilizer_mutex;
     
 public:
-    RealtimeStabilizer(int window = 5, float stab_thresh = 0.02f, float outlier_thresh = 0.1f)
+    RealtimeStabilizer(int window = 5, float stab_thresh = 0.5f, float outlier_thresh = 0.1f)
         : history_window(window), stability_threshold(stab_thresh), 
           outlier_threshold(outlier_thresh), is_stable(false), stable_frame_count(0) {}
     
@@ -154,6 +154,10 @@ private:
     
     mutable std::mutex callback_mutex;
     
+    // Connection monitoring
+    std::chrono::steady_clock::time_point last_data_time_;
+    std::atomic<bool> connection_healthy_{true};
+    std::atomic<int> reconnect_attempts_{0};
 public:
     LidarProcessor(const std::string& local_ip = LIDAR_HOST_IP,
                     const std::string& local_port = std::to_string(LIDAR_PORT),
@@ -203,7 +207,9 @@ public:
     void resumeProcessing();
     void resetStatistics();
 
-    
+    // Connection health
+    bool isConnectionHealthy() const { return connection_healthy_.load(); }
+    int getReconnectAttempts() const { return reconnect_attempts_.load(); }
 private:
     // Main processing loop
     void processLidarData();
@@ -220,6 +226,10 @@ private:
     // Data validation
     bool validateScanData(const repark_t& pack) const;
     std::vector<LidarPoint> preprocessPoints(const std::vector<LidarPoint>& raw_points);
+
+    // Connection health monitoring
+    bool reconnectLidar();
+    void checkConnectionHealth();
 };
 
 // Utility functions
@@ -261,7 +271,7 @@ struct LidarConfig {
     // Processing settings
     int buffer_size = 100;
     int stabilizer_window = 5;
-    float stability_threshold = 0.02f;
+    float stability_threshold = 0.5f;//0.02f;
     float outlier_threshold = 0.1f;
     
     // Filter settings

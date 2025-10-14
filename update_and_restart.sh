@@ -10,6 +10,7 @@ echo "----------------------------------------------------"
 
 # Bước 1: Chạy lệnh 'make' để biên dịch code
 echo ">> Bước 1: Đang chạy 'make' để build tệp thực thi mới..."
+make clean
 make
 # -f là viết tắt của "file", nó kiểm tra xem đường dẫn có tồn tại và là một file hay không
 if [ -f "/usr/local/bin/control_system" ]; then
