@@ -17,6 +17,7 @@
 #include "Lidarlib/Lidarlib.h"
 #include "Serverlib/servercommunicator.h"
 #include "Batterylib/BatteryJBD.h"
+#include "IMUlib/MPU9250_AGV.h"
 
 /**
  * @struct Point2D
@@ -65,6 +66,14 @@ struct SystemState {
     int current_speed = 0; ///< Tốc độ hiện tại của AGV.
     int target_speed = 0; ///< Tốc độ mục tiêu mà AGV đang hướng tới.
     bool movement_command_active = false;  ///< Cờ này được set khi có lệnh di chuyển (tiến/lùi/xoay) và reset khi dừng.
+
+    // Dữ liệu IMU
+    bool imu_connected = false;
+    float current_heading = 0.0f;      // Hướng hiện tại (0-360°)
+    float current_roll = 0.0f;         // Góc nghiêng trái/phải
+    float current_pitch = 0.0f;        // Góc nghiêng lên/xuống
+    bool imu_tilt_warning = false;     // Cảnh báo nghiêng nguy hiểm
+    std::string last_imu_data = "Chưa có dữ liệu IMU";
 };
 
 /**
@@ -137,6 +146,8 @@ private:
     /** @brief Phân tích và thực thi một chuỗi lệnh trên PLC. */
     std::string parseAndExecutePlcCommand(const std::string& command, MCProtocol& plc);
 
+    void heading_correction_thread();
+
     // --- Biến thành viên ---
     SystemState state_; ///< Đối tượng trạng thái chung, được chia sẻ giữa các luồng.
     std::shared_ptr<MCProtocol> plc_ptr_; ///< Con trỏ chia sẻ đến đối tượng PLC.
@@ -162,6 +173,71 @@ private:
 
     std::vector<std::thread> threads_; ///< Vector chứa tất cả các luồng đang chạy của hệ thống.
     std::vector<ServerComm::Point2D> sampleImportantPoints(const std::vector<ServerComm::Point2D>& points); ///< Lấy mẫu các điểm quan trọng từ tập hợp điểm LiDAR.
+
+    //**************************************************************************************************/
+    // IMU/MPU9250
+    std::unique_ptr<AGVNavigation> imu_ptr_; 
+    std::mutex imu_data_mutex_;
+    
+    // IMU Data
+    struct IMUData {
+        float heading = 0.0f;
+        float roll = 0.0f;
+        float pitch = 0.0f;
+        float accel_x = 0.0f;
+        float accel_y = 0.0f;
+        float accel_z = 0.0f;
+        float gyro_x = 0.0f;
+        float gyro_y = 0.0f;
+        float gyro_z = 0.0f;
+        float temperature = 0.0f;
+        bool is_tilted = false;
+        bool is_safe = true;
+        std::string compass_direction = "Unknown";
+        unsigned long timestamp = 0;
+    };
+    
+    IMUData latest_imu_data_;
+    
+    // Thread function
+    void imu_thread_func();
+
+    // Movement tracking với IMU
+    struct MovementTarget {
+        bool is_active = false;
+        float target_heading = 0.0f;         // Góc mục tiêu cần giữ
+        float heading_tolerance = 2.0f;       // Dung sai ±2°
+        bool is_forward = true;               // true: tiến, false: lùi
+        std::chrono::steady_clock::time_point start_time;
+    };
+    
+    MovementTarget current_movement_;
+    std::mutex movement_target_mutex_;
+    
+    // PID Controller cho heading
+    struct HeadingPID {
+        float kp = 50.0f;      // Proportional gain
+        float ki = 0.1f;       // Integral gain  
+        float kd = 10.0f;      // Derivative gain
+        
+        float integral = 0.0f;
+        float last_error = 0.0f;
+        float max_integral = 100.0f;
+        
+        void reset() {
+            integral = 0.0f;
+            last_error = 0.0f;
+        }
+    };
+    
+    HeadingPID heading_pid_;
+    
+    // Helper functions
+    float normalizeAngle(float angle);
+    float calculateHeadingError(float current, float target);
+    void calculateDifferentialSpeed(float heading_error, int base_speed, 
+                                   int &left_speed, int &right_speed);
+    void applyHeadingCorrection();
 };
 
 #endif // SYSTEM_MANAGER_H

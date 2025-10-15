@@ -90,6 +90,11 @@ bool SystemManager::initialize() {
             status.lidar_connected = state_.lidar_connected;
             status.battery_connected = state_.battery_connected;
             status.current_speed = static_cast<float>(state_.current_speed);
+
+            // status.imu_connected = state_.imu_connected;
+            // status.current_heading = state_.current_heading;
+            // status.current_roll = state_.current_roll;
+            // status.current_pitch = state_.current_pitch;
         }
 
         {
@@ -234,6 +239,8 @@ void SystemManager::run() {
     threads_.emplace_back(&SystemManager::safety_monitor_thread, this);
     threads_.emplace_back(&SystemManager::plc_periodic_tasks_thread, this);
     threads_.emplace_back(&SystemManager::battery_thread_func, this);
+    threads_.emplace_back(&SystemManager::imu_thread_func, this);
+    threads_.emplace_back(&SystemManager::heading_correction_thread, this);
     // Luồng server_communication_thread được quản lý bên trong lớp CommunicationServer.
 
     // Vòng lặp chính chỉ để giám sát và báo cáo trạng thái.
@@ -246,6 +253,7 @@ void SystemManager::run() {
             LOG_INFO << "LiDAR Connected: " << (state_.lidar_connected ? "Yes" : "No");
             LOG_INFO << "Server Connected: " << (state_.server_connected ? "Yes" : "No");
             LOG_INFO << "Last LiDAR Data: " << state_.last_lidar_data;
+            LOG_INFO << "Last IMU Data: " << state_.last_imu_data;
             LOG_INFO << "---------------------";
         }
     }
@@ -705,108 +713,149 @@ void SystemManager::command_handler_thread() {
 
     while (running_) {
         ServerComm::NavigationCommand cmd;
-        // Lấy lệnh từ server (getNextCommand có thể bị block).
+        
         if (comm_server_->getNextCommand(cmd)) {
             LOG_INFO << "[Command Handler] Processing command type: " << static_cast<int>(cmd.type);
 
-            // KIỂM TRA LỆNH LẶP LẠI: Nếu lệnh mới giống lệnh cũ, bỏ qua.
+            // KIỂM TRA LỆNH LẶP LẠI
             if (cmd.type == last_processed_cmd_type_) {
                 LOG_INFO << "[Command Handler] Ignoring duplicate command: " << static_cast<int>(cmd.type);
                 continue;
             }
-            last_processed_cmd_type_ = cmd.type; // Cập nhật lệnh cuối cùng đã xử lý
+            last_processed_cmd_type_ = cmd.type;
 
             bool is_safe;
-            // Lấy trạng thái an toàn hiện tại.
             {
                 std::lock_guard<std::mutex> lock(state_.state_mutex);
                 is_safe = state_.is_safe_to_move;
             }
 
-            LOG_ERROR << "[Command Handler] Command ignored! PLC is in error state: " << plc_in_error_state_ 
-                      << ", PLC connected: " << (plc_ptr_ ? (plc_ptr_->isConnected() ? "Yes" : "No") : "No");
             if (plc_in_error_state_ || plc_ptr_ == nullptr || !plc_ptr_->isConnected()) {
+                LOG_ERROR << "[Command Handler] Command ignored! PLC not ready";
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 continue;
             }
 
-            // Xử lý các lệnh không được xử lý trong switch để loại bỏ cảnh báo
-            // và đảm bảo chúng không bị bỏ qua một cách âm thầm.
-            // Các lệnh này hiện không được triển khai logic.
-            // TODO: Triển khai logic cho FOLLOW_PATH nếu cần.
             switch (cmd.type) {
-                // Các lệnh di chuyển tiến.
-                case ServerComm::NavigationCommand::MOVE_TO_POINT:{
-                    // Tạo lệnh di chuyển.
-                    LOG_INFO << "[Command Handler] Processing movement command: WRITE_D100_1";
-                    // Lưu lại lệnh di chuyển cuối cùng để có thể tự động tiếp tục.
-                    {
-                        std::lock_guard<std::mutex> lock(last_command_mutex_);
-                        last_movement_command_ = "WRITE_D100_1";
-                    }
-                    // Chỉ thực hiện nếu an toàn.
+                case ServerComm::NavigationCommand::MOVE_TO_POINT: {
+                    LOG_INFO << "[Command Handler] Processing MOVE_TO_POINT command";
+                    
                     if (is_safe) {
-                        LOG_INFO << "Executing movement command from server.";
-                        std::lock_guard<std::mutex> lock(state_.state_mutex);
-                        state_.movement_command_active = true;
-                        state_.is_moving = false;
-                        plc_command_queue_.push("WRITE_D101_0");
-                        plc_command_queue_.push("WRITE_D100_1");
+                        // LƯU LẠI GÓC HIỆN TẠI LÀM MỤC TIÊU
+                        float current_heading;
+                        {
+                            std::lock_guard<std::mutex> lock(state_.state_mutex);
+                            current_heading = state_.current_heading;
+                            state_.movement_command_active = true;
+                            state_.is_moving = false;
+                        }
+                        
+                        // Cập nhật movement target
+                        {
+                            std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                            current_movement_.is_active = true;
+                            current_movement_.target_heading = current_heading;
+                            current_movement_.heading_tolerance = 2.0f;  // ±2°
+                            current_movement_.is_forward = true;
+                            current_movement_.start_time = std::chrono::steady_clock::now();
+                            
+                            // Reset PID controller
+                            heading_pid_.reset();
+                        }
+                        
+                        LOG_INFO << "[Command Handler] Target heading locked at: " 
+                                 << current_heading << "°";
+                        
+                        // Lưu lại lệnh
+                        {
+                            std::lock_guard<std::mutex> lock(last_command_mutex_);
+                            last_movement_command_ = "WRITE_D100_1";
+                        }
+                        
+                        // Gửi lệnh di chuyển
+                        plc_command_queue_.push("WRITE_D101_0");  // Hướng: thẳng
+                        plc_command_queue_.push("WRITE_D100_1");  // Bắt đầu di chuyển
+                        
                     } else {
-                        LOG_WARNING << "Cannot execute movement - obstacle detected!";
+                        LOG_WARNING << "[Command Handler] Cannot execute - obstacle detected!";
                     }
                     break;
                 }
+                
                 case ServerComm::NavigationCommand::REVERSE_TO_POINT: {
-                    // Tạo lệnh di chuyển.
+                    LOG_INFO << "[Command Handler] Processing REVERSE_TO_POINT command";
                     
-                    LOG_INFO << "[Command Handler] Processing movement command: WRITE_D100_2" ;
-                    // Lưu lại lệnh di chuyển cuối cùng để có thể tự động tiếp tục.
+                    // LƯU LẠI GÓC HIỆN TẠI
+                    float current_heading;
+                    {
+                        std::lock_guard<std::mutex> lock(state_.state_mutex);
+                        current_heading = state_.current_heading;
+                        state_.movement_command_active = true;
+                        state_.is_moving = false;
+                    }
+                    
+                    // Cập nhật movement target
+                    {
+                        std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                        current_movement_.is_active = true;
+                        current_movement_.target_heading = current_heading;
+                        current_movement_.heading_tolerance = 3.0f;  // ±3° (rộng hơn khi lùi)
+                        current_movement_.is_forward = false;
+                        current_movement_.start_time = std::chrono::steady_clock::now();
+                        
+                        heading_pid_.reset();
+                    }
+                    
+                    LOG_INFO << "[Command Handler] Reverse target heading locked at: " 
+                             << current_heading << "°";
+                    
                     {
                         std::lock_guard<std::mutex> lock(last_command_mutex_);
                         last_movement_command_ = "WRITE_D100_2";
                     }
-                        LOG_INFO << "Executing movement command from server.";
-                        std::lock_guard<std::mutex> lock(state_.state_mutex);
-                        state_.movement_command_active = true;
-                        state_.is_moving = false;
-                        plc_command_queue_.push("WRITE_D101_0");
-                        plc_command_queue_.push("WRITE_D100_2");
-
+                    
+                    plc_command_queue_.push("WRITE_D101_0");
+                    plc_command_queue_.push("WRITE_D100_2");  // Lùi
                     break;
                 }
-                // Lệnh xoay.
+                
                 case ServerComm::NavigationCommand::ROTATE_TO_LEFT:
-                case ServerComm::NavigationCommand::ROTATE_TO_RIGHT:{
-                    LOG_INFO << "[Command Handler] Processing rotation command.";
-                    // Chỉ thực hiện nếu an toàn.
+                case ServerComm::NavigationCommand::ROTATE_TO_RIGHT: {
+                    LOG_INFO << "[Command Handler] Processing rotation command";
+                    
+                    // VÔ HIỆU HÓA heading correction khi xoay
+                    {
+                        std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                        current_movement_.is_active = false;
+                    }
+                    
                     if (is_safe) {
-                        LOG_INFO << "Executing rotation command from server.";
                         std::lock_guard<std::mutex> lock(state_.state_mutex);
                         state_.movement_command_active = true;
                         state_.is_moving = false;
 
                         plc_command_queue_.push("WRITE_D100_1");
-                        std:: string rotate_cmd = cmd.type == ServerComm::NavigationCommand::ROTATE_TO_LEFT ? "WRITE_D101_1":"WRITE_D101_2";
-                        //LOG_INFO << "[Command Handler] Processing rotate command: " << rotate_cmd << " to rotate " << cmd.type == ServerComm::NavigationCommand::ROTATE_TO_LEFT ? "Left":"Right";
-                        plc_command_queue_.push(rotate_cmd); // Giả sử xoay trái.
-                    } else {
-                        LOG_WARNING << "Cannot execute rotation - obstacle detected!";
+                        std::string rotate_cmd = cmd.type == ServerComm::NavigationCommand::ROTATE_TO_LEFT 
+                                                ? "WRITE_D101_1" : "WRITE_D101_2";
+                        plc_command_queue_.push(rotate_cmd);
                     }
                     break;
                 }
-                case ServerComm::NavigationCommand::FOLLOW_PATH: {
-                    LOG_WARNING << "[Command Handler] Received FOLLOW_PATH command, but it is not implemented yet.";
-                    // TODO: Implement logic for following a path
-                    break;
-                }
-                // Lệnh dừng.
+                
                 case ServerComm::NavigationCommand::STOP:
                 case ServerComm::NavigationCommand::EMERGENCY_STOP: {
-                    LOG_INFO << "[Command Handler] Executing STOP command from server.";
+                    LOG_INFO << "[Command Handler] Executing STOP command";
+                    
+                    // VÔ HIỆU HÓA heading correction
+                    {
+                        std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                        current_movement_.is_active = false;
+                        heading_pid_.reset();
+                    }
+                    
                     plc_command_queue_.push("WRITE_D100_0");
                     plc_command_queue_.push("WRITE_D101_0");
-                    // Xóa lệnh di chuyển cuối cùng để ngăn việc tự động tiếp tục.
+                    
                     {
                         std::lock_guard<std::mutex> lock(last_command_mutex_);
                         last_movement_command_.clear();
@@ -818,10 +867,15 @@ void SystemManager::command_handler_thread() {
                     }
                     break;
                 }
+                
+                default:
+                    LOG_WARNING << "[Command Handler] Unknown command type";
+                    break;
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
+    
     LOG_INFO << "[Command Handler] Thread stopped.";
 }
 
@@ -841,24 +895,45 @@ void SystemManager::safety_monitor_thread() {
 
     while (running_) {
         bool is_safe;
-        // Lấy trạng thái an toàn hiện tại.
         {
             std::lock_guard<std::mutex> lock(state_.state_mutex);
             is_safe = state_.is_safe_to_move;
         }
 
-        // Chuyển từ an toàn -> không an toàn: Dừng khẩn cấp.
         if (was_safe && !is_safe) {
-            LOG_WARNING << "[Safety Monitor] DANGER DETECTED! Sending stop command.";
+            LOG_WARNING << "[Safety Monitor] DANGER! Stopping movement";
+            
+            // VÔ HIỆU HÓA heading correction
+            {
+                std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                current_movement_.is_active = false;
+                heading_pid_.reset();
+            }
+            
             plc_command_queue_.push("WRITE_D100_0");
             plc_command_queue_.push("WRITE_D101_0");
-        } // Chuyển từ không an toàn -> an toàn: Tự động tiếp tục.
+        } 
         else if (!was_safe && is_safe) {
             LOG_INFO << "[Safety Monitor] Path clear. Checking for command to resume...";
             std::lock_guard<std::mutex> lock(last_command_mutex_);
-            // Chỉ tiếp tục nếu có lệnh di chuyển cuối cùng và PLC không bị lỗi.
+            
             if (!last_movement_command_.empty() && !plc_in_error_state_) {
-                LOG_INFO << "[Safety Monitor] Resuming last command: " << last_movement_command_;
+                LOG_INFO << "[Safety Monitor] Resuming: " << last_movement_command_;
+                
+                // KHÔI PHỤC heading correction
+                float current_heading;
+                {
+                    std::lock_guard<std::mutex> lock2(state_.state_mutex);
+                    current_heading = state_.current_heading;
+                }
+                
+                {
+                    std::lock_guard<std::mutex> lock2(movement_target_mutex_);
+                    current_movement_.is_active = true;
+                    current_movement_.target_heading = current_heading;
+                    heading_pid_.reset();
+                }
+                
                 plc_command_queue_.push(last_movement_command_);
             }
         }
@@ -866,6 +941,7 @@ void SystemManager::safety_monitor_thread() {
         was_safe = is_safe;
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+    
     LOG_INFO << "[Safety Monitor] Stopped.";
 }
 
@@ -977,6 +1053,331 @@ std::vector<ServerComm::Point2D> SystemManager::sampleImportantPoints(const std:
     }
 
     return result;
+}
+
+/**
+ * @brief Luồng xử lý dữ liệu từ cảm biến IMU MPU9250.
+ * @details
+ * - Ghim luồng vào CPU core 2.
+ * - Khởi tạo và bắt đầu AGVNavigation.
+ * - Đọc dữ liệu real-time từ MPU9250 với tần số ~100Hz.
+ * - Cập nhật orientation (heading, roll, pitch) cho điều hướng AGV.
+ * - Kiểm tra an toàn (nghiêng, va chạm).
+ * - Cập nhật state_ để các thread khác sử dụng.
+ */
+void SystemManager::imu_thread_func() {
+    pin_thread_to_core(2);
+    LOG_INFO << "[IMU Thread] Starting MPU9250 navigation system...";
+
+    // Vòng lặp chính để quản lý kết nối và xử lý dữ liệu IMU
+    while (running_) {
+        imu_ptr_ = std::make_unique<AGVNavigation>();
+        
+        // Thử khởi tạo với retry
+        int init_attempts = 0;
+        bool initialized = false;
+
+        while (init_attempts < 3 && running_) {
+            if (imu_ptr_->begin("/dev/i2c-1")) {
+                initialized = true;
+                LOG_INFO << "[IMU Thread] MPU9250 initialized successfully";
+                break;
+            }
+
+            LOG_WARNING << "[IMU Thread] Initialization attempt "
+                        << (init_attempts + 1) << " failed. Retrying in 3s...";
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            init_attempts++;
+        }
+
+        if (!initialized) {
+            LOG_ERROR << "[IMU Thread] Failed to initialize after 3 attempts";
+            std::lock_guard<std::mutex> lock(state_.state_mutex);
+            state_.imu_connected = false;
+            state_.last_imu_data = "IMU initialization failed";
+            
+            // Đợi 10 giây rồi thử lại
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+            continue;
+        }
+
+        // Hiệu chuẩn gyroscope
+        LOG_INFO << "[IMU Thread] Calibrating gyroscope...";
+        imu_ptr_->calibrateGyro(2000);
+        
+        // Cấu hình tham số an toàn
+        imu_ptr_->setMaxTiltAngle(30.0f);        // 30° max tilt
+        imu_ptr_->setCollisionThreshold(3.0f);   // 3g collision threshold
+        imu_ptr_->setFilterBeta(0.08f);          // Madgwick filter gain
+
+        {
+            std::lock_guard<std::mutex> lock(state_.state_mutex);
+            state_.imu_connected = true;
+            state_.last_imu_data = "IMU connected and calibrated";
+        }
+
+        LOG_INFO << "[IMU Thread] Entering main loop at ~100Hz";
+
+        // Main processing loop
+        int consecutive_errors = 0;
+        const int MAX_CONSECUTIVE_ERRORS = 50; // ~0.5 giây ở 100Hz
+
+        while (running_ && consecutive_errors < MAX_CONSECUTIVE_ERRORS) {
+            try {
+                // Update sensor fusion (Madgwick filter)
+                imu_ptr_->update();
+
+                // Read processed data
+                float heading, roll, pitch;
+                imu_ptr_->getOrientation(heading, roll, pitch);
+
+                // Read raw sensor data
+                float ax, ay, az, gx, gy, gz, mx, my, mz;
+                imu_ptr_->getRawAccel(ax, ay, az);
+                imu_ptr_->getRawGyro(gx, gy, gz);
+                imu_ptr_->getRawMag(mx, my, mz);
+                float temp = imu_ptr_->getTemperature();
+
+                // Safety checks
+                bool is_safe = imu_ptr_->isSafe();
+                bool is_tilted = imu_ptr_->isTilted();
+                const char* compass_dir = imu_ptr_->getCompassDirection();
+
+                // Update shared state
+                {
+                    std::lock_guard<std::mutex> lock(state_.state_mutex);
+                    state_.imu_connected = true;
+                    state_.current_heading = heading;
+                    state_.current_roll = roll;
+                    state_.current_pitch = pitch;
+                    state_.imu_tilt_warning = is_tilted;
+
+                    // Update status string
+                    std::stringstream ss;
+                    ss << std::fixed << std::setprecision(1);
+                    ss << "Heading: " << heading << "° (" << compass_dir << "), "
+                       << "Roll: " << roll << "°, "
+                       << "Pitch: " << pitch << "°, "
+                       << "Safe: " << (is_safe ? "Yes" : "No");
+                    state_.last_imu_data = ss.str();
+                }
+
+                // Update local IMU data structure (for detailed access)
+                {
+                    std::lock_guard<std::mutex> lock(imu_data_mutex_);
+                    latest_imu_data_.heading = heading;
+                    latest_imu_data_.roll = roll;
+                    latest_imu_data_.pitch = pitch;
+                    latest_imu_data_.accel_x = ax;
+                    latest_imu_data_.accel_y = ay;
+                    latest_imu_data_.accel_z = az;
+                    latest_imu_data_.gyro_x = gx;
+                    latest_imu_data_.gyro_y = gy;
+                    latest_imu_data_.gyro_z = gz;
+                    latest_imu_data_.temperature = temp;
+                    latest_imu_data_.is_tilted = is_tilted;
+                    latest_imu_data_.is_safe = is_safe;
+                    latest_imu_data_.compass_direction = compass_dir;
+                    latest_imu_data_.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                }
+
+                // Log periodically (mỗi giây)
+                static int log_counter = 0;
+                if (++log_counter >= 100) { // 100 samples @ 100Hz = 1 second
+                    LOG_INFO << "[IMU Thread] Heading: " << heading << "° (" << compass_dir 
+                             << "), Roll: " << roll << "°, Pitch: " << pitch 
+                             << "°, Temp: " << temp << "°C";
+                    log_counter = 0;
+                }
+
+                // Cảnh báo nếu nghiêng nguy hiểm
+                if (is_tilted && !is_safe) {
+                    LOG_WARNING << "[IMU Thread] DANGER: Excessive tilt detected! Roll: " 
+                                << roll << "°, Pitch: " << pitch << "°";
+                }
+
+                consecutive_errors = 0; // Reset error counter on success
+
+            } catch (const std::exception& e) {
+                LOG_ERROR << "[IMU Thread] Error reading IMU data: " << e.what();
+                consecutive_errors++;
+            }
+
+            // Run at ~100Hz (10ms period)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        // Nếu tới đây nghĩa là mất kết nối hoặc quá nhiều lỗi
+        LOG_WARNING << "[IMU Thread] IMU connection lost or too many errors. Restarting...";
+        imu_ptr_.reset();
+
+        {
+            std::lock_guard<std::mutex> lock(state_.state_mutex);
+            state_.imu_connected = false;
+            state_.last_imu_data = "IMU disconnected";
+        }
+
+        // Đợi trước khi thử khởi động lại
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+    }
+
+    LOG_INFO << "[IMU Thread] Stopped.";
+}
+
+/**
+ * @brief Chuẩn hóa góc về khoảng [0, 360)
+ */
+float SystemManager::normalizeAngle(float angle) {
+    while (angle < 0.0f) angle += 360.0f;
+    while (angle >= 360.0f) angle -= 360.0f;
+    return angle;
+}
+
+/**
+ * @brief Tính sai số góc ngắn nhất giữa góc hiện tại và góc mục tiêu
+ * @return Sai số trong khoảng [-180, 180]
+ */
+float SystemManager::calculateHeadingError(float current, float target) {
+    current = normalizeAngle(current);
+    target = normalizeAngle(target);
+    
+    float error = target - current;
+    
+    // Tìm đường đi ngắn nhất
+    if (error > 180.0f) {
+        error -= 360.0f;
+    } else if (error < -180.0f) {
+        error += 360.0f;
+    }
+    
+    return error;
+}
+
+/**
+ * @brief Tính toán tốc độ 2 bánh để điều chỉnh hướng
+ * @param heading_error Sai số góc (độ), + nghĩa là cần quay phải
+ * @param base_speed Tốc độ cơ bản
+ * @param left_speed Output: tốc độ bánh trái
+ * @param right_speed Output: tốc độ bánh phải
+ */
+void SystemManager::calculateDifferentialSpeed(float heading_error, int base_speed,
+                                               int &left_speed, int &right_speed) {
+    // Tính toán PID
+    heading_pid_.integral += heading_error;
+    
+    // Anti-windup: giới hạn integral
+    if (heading_pid_.integral > heading_pid_.max_integral) {
+        heading_pid_.integral = heading_pid_.max_integral;
+    } else if (heading_pid_.integral < -heading_pid_.max_integral) {
+        heading_pid_.integral = -heading_pid_.max_integral;
+    }
+    
+    float derivative = heading_error - heading_pid_.last_error;
+    heading_pid_.last_error = heading_error;
+    
+    // PID output
+    float correction = (heading_pid_.kp * heading_error) +
+                      (heading_pid_.ki * heading_pid_.integral) +
+                      (heading_pid_.kd * derivative);
+    
+    // Giới hạn correction trong khoảng hợp lý
+    correction = std::max(-base_speed * 0.5f, std::min(base_speed * 0.5f, correction));
+    
+    // Tính tốc độ 2 bánh
+    // Nếu heading_error > 0: cần quay phải -> giảm tốc bánh phải
+    // Nếu heading_error < 0: cần quay trái -> giảm tốc bánh trái
+    left_speed = base_speed + static_cast<int>(correction);
+    right_speed = base_speed - static_cast<int>(correction);
+    
+    // Đảm bảo tốc độ trong giới hạn cho phép
+    left_speed = std::max(0, std::min(3000, left_speed));
+    right_speed = std::max(0, std::min(3000, right_speed));
+    
+    LOG_INFO << "[Heading Control] Error: " << std::fixed << std::setprecision(2) 
+             << heading_error << "°, Correction: " << correction 
+             << ", Left: " << left_speed << ", Right: " << right_speed;
+}
+
+/**
+ * @brief Áp dụng điều chỉnh hướng dựa trên IMU
+ * Hàm này được gọi định kỳ từ một thread riêng
+ */
+void SystemManager::applyHeadingCorrection() {
+    MovementTarget target;
+    float current_heading;
+    int current_speed;
+    
+    // Lấy thông tin movement target
+    {
+        std::lock_guard<std::mutex> lock(movement_target_mutex_);
+        target = current_movement_;
+    }
+    
+    // Nếu không có movement đang active, không làm gì
+    if (!target.is_active) {
+        return;
+    }
+    
+    // Lấy heading hiện tại từ IMU
+    {
+        std::lock_guard<std::mutex> lock(state_.state_mutex);
+        current_heading = state_.current_heading;
+        current_speed = state_.current_speed;
+    }
+    
+    // Nếu tốc độ = 0, không cần điều chỉnh
+    if (current_speed == 0) {
+        return;
+    }
+    
+    // Tính sai số góc
+    float heading_error = calculateHeadingError(current_heading, target.target_heading);
+    
+    // Kiểm tra xem có cần điều chỉnh không
+    if (fabs(heading_error) > target.heading_tolerance) {
+        LOG_WARNING << "[Heading Control] Heading deviation detected! "
+                   << "Current: " << current_heading << "°, "
+                   << "Target: " << target.target_heading << "°, "
+                   << "Error: " << heading_error << "°";
+        
+        // Tính tốc độ 2 bánh
+        int left_speed, right_speed;
+        calculateDifferentialSpeed(heading_error, current_speed, left_speed, right_speed);
+        
+        // Gửi lệnh xuống PLC
+        // Giả sử D104 = tốc độ bánh trái, D105 = tốc độ bánh phải
+        plc_command_queue_.push("WRITE_D104_" + std::to_string(left_speed));
+        plc_command_queue_.push("WRITE_D105_" + std::to_string(right_speed));
+        
+    } else {
+        // Đi đúng hướng, giữ nguyên tốc độ 2 bánh bằng nhau
+        plc_command_queue_.push("WRITE_D104_" + std::to_string(current_speed));
+        plc_command_queue_.push("WRITE_D105_" + std::to_string(current_speed));
+    }
+}
+
+
+/**
+ * @brief Luồng điều chỉnh hướng liên tục dựa trên IMU
+ * @details Chạy với tần số cao (~50Hz) để điều chỉnh hướng real-time
+ */
+void SystemManager::heading_correction_thread() {
+    pin_thread_to_core(3);
+    LOG_INFO << "[Heading Correction] Thread started";
+    
+    while (running_) {
+        try {
+            applyHeadingCorrection();
+        } catch (const std::exception& e) {
+            LOG_ERROR << "[Heading Correction] Error: " << e.what();
+        }
+        
+        // Chạy ở 50Hz (20ms)
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    
+    LOG_INFO << "[Heading Correction] Thread stopped";
 }
 // Lưu ý: Luồng server_communication_thread không còn được quản lý trực tiếp ở đây.
 // Nó được quản lý bên trong lớp ServerComm::CommunicationServer,

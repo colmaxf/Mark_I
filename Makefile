@@ -1,7 +1,6 @@
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -O3 -pthread -march=armv8-a+crc+crypto -mtune=cortex-a76 -flto -ffast-math
-INCLUDES = -I. -Ilogger -IMCprotocollib -ILidarlib -IServerlib -IBatterylib
-
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -pthread -march=armv8-a+crc+crypto -mtune=cortex-a76
+INCLUDES = -I. -Ilogger -IMCprotocollib -ILidarlib -IServerlib -IBatterylib -IIMUlib
 LIBS = -lboost_thread -lboost_system -lpthread -ldl -lz -ldlt
 
 SOURCES = main.cpp \
@@ -11,10 +10,10 @@ SOURCES = main.cpp \
           Lidarlib/Lidarlib.cpp \
           Lidarlib/Data_SDK/LakiBeamUDP.cpp \
           Serverlib/servercommunicator.cpp \
-          Batterylib/BatteryJBD.cpp
+          Batterylib/BatteryJBD.cpp \
+          IMUlib/MPU9250_AGV.cpp
 
 OBJECTS = $(SOURCES:.cpp=.o)
-
 TARGET = control_system
 
 all: $(TARGET)
@@ -40,5 +39,6 @@ MCprotocollib/MCprotocol.o: config.h
 Lidarlib/Lidarlib.o: config.h
 Serverlib/servercommunicator.o: config.h
 Batterylib/BatteryJBD.o: config.h
+IMUlib/MPU9250_AGV.o: config.h
 
 .PHONY: all clean run
