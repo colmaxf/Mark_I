@@ -41,7 +41,7 @@ sudo apt-get install -y \
     libsuitesparse-dev \
     libprotobuf-dev \
     google-mock \
-    libatlas-base-dev \
+    libopenblas-dev \
     libdlt-dev \
     dlt-daemon \
     dlt-tools \

@@ -191,7 +191,7 @@ After=dlt-logger.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/mkdir -p /tmp/dlt && /bin/chmod 777 /tmp/dlt
+ExecStart=/bin/sh -c "mkdir -p /tmp/dlt /var/log/dlt; chmod 777 /tmp/dlt; chmod 755 /var/log/dlt; exit 0"
 RemainAfterExit=true
 
 [Install]
