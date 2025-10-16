@@ -99,6 +99,13 @@ public:
     void getEulerAngles(float &roll, float &pitch, float &yaw);
 
     /**
+     * @brief Lấy góc Yaw thô (chưa chuẩn hóa) để debug.
+     * @return Góc yaw theo độ, có thể âm.
+     */
+    float getRawYaw();
+
+
+    /**
      * @brief Lấy định hướng hiện tại dưới dạng quaternion.
      * @param[out] w Thành phần w của quaternion.
      * @param[out] x Thành phần x của quaternion.
@@ -218,6 +225,8 @@ public:
     void getOrientation(float &heading, float &roll, float &pitch);
     /** @brief Lấy góc hướng hiện tại (yaw). */
     float getHeading();
+    /** @brief Lấy góc Yaw thô (chưa chuẩn hóa) để debug. */
+    float getRawYaw();
     /** @brief Lấy góc cuộn hiện tại (roll). */
     float getRoll();
     /** @brief Lấy góc nghiêng hiện tại (pitch). */

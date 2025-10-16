@@ -852,6 +852,14 @@ void SystemManager::command_handler_thread() {
                 case ServerComm::NavigationCommand::ROTATE_TO_LEFT:
                 case ServerComm::NavigationCommand::ROTATE_TO_RIGHT: {
                     LOG_INFO << "[Command Handler] Processing rotation command";
+
+                    // LOG GÓC HIỆN TẠI TRƯỚC KHI XOAY
+                    {
+                        std::lock_guard<std::mutex> lock(state_.state_mutex);
+                        LOG_INFO << "[Command Handler] Current heading before rotation: "
+                                 << std::fixed << std::setprecision(2)
+                                 << state_.current_heading << "°";
+                    }
                     
                     // VÔ HIỆU HÓA heading correction khi xoay
                     {
@@ -1214,11 +1222,23 @@ void SystemManager::imu_thread_func() {
 
                 // Log periodically (mỗi giây)
                 static int log_counter = 0;
-                if (++log_counter >= 100) { // 100 samples @ 100Hz = 1 second
-                    LOG_INFO << "[IMU Thread] Heading: " << heading << "° (" << compass_dir 
-                             << "), Roll: " << roll << "°, Pitch: " << pitch 
-                             << "°, Temp: " << temp << "°C";
-                    log_counter = 0;
+                if (++log_counter >= 50) { // Log mỗi 0.5 giây (50 samples @ 100Hz)
+                    // Lấy giá trị yaw chưa chuẩn hóa để debug
+                    float raw_yaw = imu_ptr_->getRawYaw();
+
+                    std::stringstream imu_log_ss;
+                    imu_log_ss << std::fixed << std::setprecision(2)
+                               << "[IMU] Heading: " << heading << "° (" << compass_dir << ")"
+                               << " | Raw Yaw: " << raw_yaw << "°"
+                               << " | Roll: " << roll << "°"
+                               << " | Pitch: " << pitch << "°"
+                               << " | Gyro(Z): " << gz << " dps";
+                    LOG_INFO << imu_log_ss.str();
+                    
+                    // LOG_INFO << "[IMU Thread] Heading: " << heading << "° (" << compass_dir 
+                    //          << "), Roll: " << roll << "°, Pitch: " << pitch 
+                    //          << "°, Temp: " << temp << "°C";
+                    log_counter = 0; // Reset counter
                 }
 
                 // Cảnh báo nếu nghiêng nguy hiểm
@@ -1334,10 +1354,13 @@ void SystemManager::calculateDifferentialSpeed(float heading_error, int base_spe
     left_speed = std::max(0, std::min(3000, left_speed));
     right_speed = std::max(0, std::min(3000, right_speed));
     
-    LOG_INFO << "[Heading Control] Base: " << base_speed
-             << ", Error: " << std::fixed << std::setprecision(2) << heading_error << "°"
-             << ", Correction: " << correction 
-             << " → Left: " << left_speed << ", Right: " << right_speed;
+    LOG_INFO << "[PID] Base: " << base_speed
+             << " | Err: " << std::fixed << std::setprecision(2) << heading_error << "°"
+             << " | P: " << (heading_pid_.kp * heading_error)
+             << " | I: " << (heading_pid_.ki * heading_pid_.integral)
+             << " | D: " << (heading_pid_.kd * derivative)
+             << " | Corr: " << correction 
+             << " -> L:" << left_speed << ", R:" << right_speed;
 }
 
 /**
@@ -1660,6 +1683,14 @@ void SystemManager::keyboard_control_thread() {
                 // XOAY TRÁI
                 LOG_INFO << "[Keyboard Control] ROTATE LEFT";
                 
+                // LOG GÓC HIỆN TẠI TRƯỚC KHI XOAY
+                {
+                    std::lock_guard<std::mutex> lock(state_.state_mutex);
+                    LOG_INFO << "[Keyboard Control] Current heading before rotation: "
+                             << std::fixed << std::setprecision(2)
+                             << state_.current_heading << "°";
+                }
+
                 {
                     std::lock_guard<std::mutex> lock(movement_target_mutex_);
                     current_movement_.is_active = false;
@@ -1683,6 +1714,14 @@ void SystemManager::keyboard_control_thread() {
                 // XOAY PHẢI
                 LOG_INFO << "[Keyboard Control] ROTATE RIGHT";
                 
+                // LOG GÓC HIỆN TẠI TRƯỚC KHI XOAY
+                {
+                    std::lock_guard<std::mutex> lock(state_.state_mutex);
+                    LOG_INFO << "[Keyboard Control] Current heading before rotation: "
+                             << std::fixed << std::setprecision(2)
+                             << state_.current_heading << "°";
+                }
+
                 {
                     std::lock_guard<std::mutex> lock(movement_target_mutex_);
                     current_movement_.is_active = false;

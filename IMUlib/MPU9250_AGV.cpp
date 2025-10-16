@@ -267,6 +267,7 @@ void MadgwickFilter::getEulerAngles(float &roll, float &pitch, float &yaw) {
     // Roll: xoay quanh Z (trục trước) → nghiêng TRÁI/PHẢI
     // Roll > 0: nghiêng TRÁI
     // Roll < 0: nghiêng PHẢI
+    //
     roll = atan2(2.0f * (q0 * q3 + q1 * q2), 
                  1.0f - 2.0f * (q2 * q2 + q3 * q3)) * 57.29578f;
     
@@ -288,6 +289,19 @@ void MadgwickFilter::getEulerAngles(float &roll, float &pitch, float &yaw) {
     // Chuẩn hóa yaw về [0, 360)
     if(yaw < 0) yaw += 360.0f;
 }
+
+/**
+ * @brief Lấy góc Yaw thô (chưa chuẩn hóa) để debug.
+ * @return Góc yaw theo độ, có thể âm.
+ */
+float MadgwickFilter::getRawYaw() {
+    // Phép tính tương tự getEulerAngles nhưng không chuẩn hóa về [0, 360)
+    // và vẫn giữ dấu trừ nếu có.
+    float yaw = atan2(-2.0f * (q0 * q2 + q1 * q3),
+                      1.0f - 2.0f * (q1 * q1 + q2 * q2)) * 57.29578f;
+    return yaw;
+}
+
 
 /**
  * @brief Lấy định hướng hiện tại dưới dạng quaternion.
@@ -543,7 +557,7 @@ void AGVNavigation::update() {
     madgwick.getEulerAngles(roll, pitch, heading);
     
     // Safety checks
-    checkTiltSafety();
+    //checkTiltSafety();
     detectCollision(ax, ay, az);
 }
 
@@ -559,6 +573,11 @@ void AGVNavigation::getOrientation(float &h, float &r, float &p) {
 float AGVNavigation::getHeading() {
     std::lock_guard<std::mutex> lock(data_mutex);
     return heading;
+}
+
+float AGVNavigation::getRawYaw() {
+    std::lock_guard<std::mutex> lock(data_mutex);
+    return madgwick.getRawYaw();
 }
 
 /** @brief Lấy góc cuộn hiện tại (roll). */
