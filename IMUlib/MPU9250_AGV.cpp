@@ -280,8 +280,10 @@ void MadgwickFilter::getEulerAngles(float &roll, float &pitch, float &yaw) {
         pitch = asin(sinp) * 57.29578f;
     
     // Yaw: xoay quanh Y (trục lên) → HƯỚNG DI CHUYỂN
-    yaw = atan2(2.0f * (q0 * q2 + q1 * q3), 
-                1.0f - 2.0f * (q1 * q1 + q2 * q2)) * 57.29578f;
+    // yaw = atan2(2.0f * (q0 * q2 + q1 * q3), 
+    //             1.0f - 2.0f * (q1 * q1 + q2 * q2)) * 57.29578f;
+    yaw = atan2(-2.0f * (q0 * q2 + q1 * q3),  //THÊM DẤU TRỪ
+            1.0f - 2.0f * (q1 * q1 + q2 * q2)) * 57.29578f;
     
     // Chuẩn hóa yaw về [0, 360)
     if(yaw < 0) yaw += 360.0f;

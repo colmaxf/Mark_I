@@ -535,7 +535,9 @@ void SystemManager::plc_thread_func() {
  * - Thiết lập `setRealtimeCallback`: được gọi cho mỗi frame dữ liệu LiDAR.
  *   - Tính toán khoảng cách an toàn phía trước.
  *   - Cập nhật `is_safe_to_move` và `current_front_distance` trong `state_`.
- *   - Tính toán tốc độ mượt mà và gửi lệnh `WRITE_D103_...` đến PLC.
+ *   - Tính toán tốc độ mượt mà và lưu vào state_.current_speed
+ *   - GHI D103 = 1 (an toàn) hoặc 0 (không an toàn)
+ *   - Heading correction sẽ xử lý D104/D105 ở thread riêng
  * - Thiết lập `setStablePointsCallback`: được gọi khi có một tập hợp điểm ổn định.
  *   - Đẩy các điểm này vào `stable_points_queue_` để luồng server gửi đi.
  * - Dừng `LidarProcessor` khi luồng kết thúc.
@@ -611,6 +613,7 @@ void SystemManager::lidar_thread_func() {
             float min_dist_cm = min_front * 100.0f; // Chuyển từ mét sang cm.
             int smooth_speed = 0; // Tốc độ mượt mà để gửi đến PLC.
             bool movement_active = false; // Cờ lệnh di chuyển hiện tại.
+             bool is_safe = false;
 
             // Khóa mutex để cập nhật và đọc state_ một cách an toàn.
             {
@@ -619,6 +622,7 @@ void SystemManager::lidar_thread_func() {
                 state_.is_safe_to_move = min_dist_cm > EMERGENCY_STOP_DISTANCE_CM; // Cập nhật trạng thái an toàn.
                 state_.last_safety_update = std::chrono::steady_clock::now().time_since_epoch().count(); // Cập nhật thời gian.
                 movement_active = state_.movement_command_active; // Lấy trạng thái lệnh di chuyển hiện tại.
+                is_safe = state_.is_safe_to_move; // Lấy trạng thái an toàn hiện tại.
 
                 // Cập nhật chuỗi trạng thái LiDAR để ghi log
                 std::stringstream ss;
@@ -633,16 +637,23 @@ void SystemManager::lidar_thread_func() {
                 } else {
                     smooth_speed = calculateSmoothSpeed(min_dist_cm, false); // movement_active = false
                 }
+                 // LƯU smooth_speed vào state để heading correction dùng
+                state_.current_speed = smooth_speed;
             }
 
             // Chỉ gửi lệnh tốc độ đến PLC nếu giá trị tốc độ thay đổi để giảm tải.
-            static int last_sent_speed = -1;
-            if (smooth_speed != last_sent_speed) { // Gửi lệnh mới nếu tốc độ thay đổi.
-                LOG_INFO << "[LIDAR Thread] Sending speed command to PLC: " << smooth_speed;
-                // Đẩy lệnh điều khiển tốc độ vào hàng đợi PLC.
-                plc_command_queue_.push("WRITE_D103_" + std::to_string(smooth_speed));
-                last_sent_speed = smooth_speed;
+            static int last_sent_safety = -1;
+            int safety_signal = is_safe ? 1 : 0;
+            
+            if (safety_signal != last_sent_safety) {
+                plc_command_queue_.push("WRITE_D103_" + std::to_string(safety_signal));
+                last_sent_safety = safety_signal;
+                LOG_INFO << "[LIDAR Thread] Safety signal D103 = " << safety_signal;
             }
+
+            // =====================================================
+            // D104/D105 SẼ ĐƯỢC XỬ LÝ BỞI heading_correction_thread
+            // =====================================================
         });
 
         // // Callback xử lý dữ liệu ổn định để gửi lên server.
@@ -686,7 +697,9 @@ void SystemManager::lidar_thread_func() {
         // Gửi lệnh dừng khẩn cấp nếu đang di chuyển
         if (state_.is_moving) {
             plc_command_queue_.push("WRITE_D100_0");  // Stop
-            plc_command_queue_.push("WRITE_D103_0");  // Speed = 0
+            plc_command_queue_.push("WRITE_D103_0");  // Safety OFF
+            plc_command_queue_.push("WRITE_D104_0");  // Left wheel stop
+            plc_command_queue_.push("WRITE_D105_0");  // Right wheel stop
             LOG_WARNING << "[LiDAR Thread] Emergency stop due to LiDAR disconnection";
         }
 
@@ -1257,9 +1270,13 @@ float SystemManager::calculateHeadingError(float current, float target) {
 /**
  * @brief Tính toán tốc độ 2 bánh để điều chỉnh hướng
  * @param heading_error Sai số góc (độ), + nghĩa là cần quay phải
- * @param base_speed Tốc độ cơ bản
+ * @param base_speed Tốc độ cơ bản (smooth_speed từ LiDAR)
  * @param left_speed Output: tốc độ bánh trái
  * @param right_speed Output: tốc độ bánh phải
+ * 
+ * LOGIC:
+ * - heading_error > 0 (cần quay PHẢI): GIẢM tốc bánh PHẢI
+ * - heading_error < 0 (cần quay TRÁI): GIẢM tốc bánh TRÁI
  */
 void SystemManager::calculateDifferentialSpeed(float heading_error, int base_speed,
                                                int &left_speed, int &right_speed) {
@@ -1281,32 +1298,43 @@ void SystemManager::calculateDifferentialSpeed(float heading_error, int base_spe
                       (heading_pid_.ki * heading_pid_.integral) +
                       (heading_pid_.kd * derivative);
     
-    // Giới hạn correction trong khoảng hợp lý
-    correction = std::max(-base_speed * 0.5f, std::min(base_speed * 0.5f, correction));
+    // Giới hạn correction (max 50% của base_speed)
+    float max_correction = base_speed * 0.5f;
+    correction = std::max(-max_correction, std::min(max_correction, correction));
     
-    // Tính tốc độ 2 bánh
-    // Nếu heading_error > 0: cần quay phải -> giảm tốc bánh phải
-    // Nếu heading_error < 0: cần quay trái -> giảm tốc bánh trái
+    // =====================================================
+    // TÍNH TỐC ĐỘ 2 BÁNH
+    // =====================================================
+    // CHÚ Ý: MPU9250 có X hướng PHẢI (Left-Hand Rule)
+    // heading_error > 0: Cần quay PHẢI → Giảm tốc bánh PHẢI
+    // heading_error < 0: Cần quay TRÁI → Giảm tốc bánh TRÁI
+    // =====================================================
+    
     left_speed = base_speed + static_cast<int>(correction);
     right_speed = base_speed - static_cast<int>(correction);
     
-    // Đảm bảo tốc độ trong giới hạn cho phép
+    // Đảm bảo tốc độ trong giới hạn [0, 3000]
     left_speed = std::max(0, std::min(3000, left_speed));
     right_speed = std::max(0, std::min(3000, right_speed));
     
-    LOG_INFO << "[Heading Control] Error: " << std::fixed << std::setprecision(2) 
-             << heading_error << "°, Correction: " << correction 
-             << ", Left: " << left_speed << ", Right: " << right_speed;
+    LOG_INFO << "[Heading Control] Base: " << base_speed
+             << ", Error: " << std::fixed << std::setprecision(2) << heading_error << "°"
+             << ", Correction: " << correction 
+             << " → Left: " << left_speed << ", Right: " << right_speed;
 }
 
 /**
  * @brief Áp dụng điều chỉnh hướng dựa trên IMU
- * Hàm này được gọi định kỳ từ một thread riêng
+ * @details
+ * - Đọc smooth_speed từ state_.current_speed (được tính bởi LiDAR thread)
+ * - Tính heading error
+ * - Điều chỉnh tốc độ 2 bánh (D104, D105) để giữ hướng thẳng
  */
 void SystemManager::applyHeadingCorrection() {
     MovementTarget target;
     float current_heading;
-    int current_speed;
+    int base_speed; // Tốc độ gốc từ LiDAR
+    bool is_safe;
     
     // Lấy thông tin movement target
     {
@@ -1319,15 +1347,18 @@ void SystemManager::applyHeadingCorrection() {
         return;
     }
     
-    // Lấy heading hiện tại từ IMU
+    // Lấy heading và base_speed
     {
         std::lock_guard<std::mutex> lock(state_.state_mutex);
         current_heading = state_.current_heading;
-        current_speed = state_.current_speed;
+        base_speed = state_.current_speed;  // ← Smooth speed từ LiDAR
+        is_safe = state_.is_safe_to_move;
     }
     
-    // Nếu tốc độ = 0, không cần điều chỉnh
-    if (current_speed == 0) {
+    // Nếu không an toàn hoặc tốc độ = 0, dừng 2 bánh
+    if (!is_safe || base_speed == 0) {
+        plc_command_queue_.push("WRITE_D104_0");
+        plc_command_queue_.push("WRITE_D105_0");
         return;
     }
     
@@ -1336,27 +1367,27 @@ void SystemManager::applyHeadingCorrection() {
     
     // Kiểm tra xem có cần điều chỉnh không
     if (fabs(heading_error) > target.heading_tolerance) {
-        LOG_WARNING << "[Heading Control] Heading deviation detected! "
+        LOG_WARNING << "[Heading Control] Deviation detected! "
                    << "Current: " << current_heading << "°, "
                    << "Target: " << target.target_heading << "°, "
                    << "Error: " << heading_error << "°";
         
         // Tính tốc độ 2 bánh
         int left_speed, right_speed;
-        calculateDifferentialSpeed(heading_error, current_speed, left_speed, right_speed);
+        calculateDifferentialSpeed(heading_error, base_speed, left_speed, right_speed);
         
         // Gửi lệnh xuống PLC
-        // Giả sử D104 = tốc độ bánh trái, D105 = tốc độ bánh phải
         plc_command_queue_.push("WRITE_D104_" + std::to_string(left_speed));
         plc_command_queue_.push("WRITE_D105_" + std::to_string(right_speed));
         
     } else {
-        // Đi đúng hướng, giữ nguyên tốc độ 2 bánh bằng nhau
-        plc_command_queue_.push("WRITE_D104_" + std::to_string(current_speed));
-        plc_command_queue_.push("WRITE_D105_" + std::to_string(current_speed));
+        // Đi đúng hướng, 2 bánh cùng tốc độ
+        plc_command_queue_.push("WRITE_D104_" + std::to_string(base_speed));
+        plc_command_queue_.push("WRITE_D105_" + std::to_string(base_speed));
+        
+        LOG_INFO << "[Heading Control] On track. Both wheels: " << base_speed;
     }
 }
-
 
 /**
  * @brief Luồng điều chỉnh hướng liên tục dựa trên IMU
