@@ -2,7 +2,7 @@
 
 # Script này sẽ tự động cài đặt và cấu hình DLT daemon, DLT logger,
 # và dịch vụ control_system cho AGV.
-# Chạy script này với quyền sudo: sudo ./setup.sh
+# Chạy script này với quyền sudo: sudo ./setup_agv.sh
 
 # Kiểm tra quyền root
 if [ "$EUID" -ne 0 ]; then
@@ -13,51 +13,75 @@ fi
 echo ">> Bắt đầu quá trình cài đặt tự động..."
 echo "===================================================="
 
+# --- Bước 0: Dọn dẹp process cũ ---
+echo ">> Bước 0: Dọn dẹp các process cũ..."
+systemctl stop dlt-daemon.service 2>/dev/null || true
+systemctl stop dlt-logger.service 2>/dev/null || true
+systemctl stop control_system_agv.service 2>/dev/null || true
+pkill -9 dlt-daemon 2>/dev/null || true
+pkill -9 dlt-receive 2>/dev/null || true
+pkill -9 control_system 2>/dev/null || true
+sleep 2
+echo "OK"
+echo "===================================================="
+
 # --- Bước 1: Tạo các tệp cấu hình và dịch vụ ---
 
 # Tạo thư mục cần thiết
 echo "--> Tạo thư mục /usr/local/bin và /var/log/dlt..."
-sudo mkdir -p /usr/local/bin
-sudo mkdir -p /var/log/dlt
+mkdir -p /usr/local/bin
+mkdir -p /var/log/dlt
+chmod 755 /var/log/dlt
 
-# 1. Tệp /etc/dlt.conf
+# 1. Tệp /etc/dlt.conf - FIXED VERSION
 echo "--> Tạo tệp /etc/dlt.conf..."
 cat > /etc/dlt.conf << 'EOF'
-# Cấu hình cho dlt-daemon v2.x
+########################################################################
+# Configuration file of DLT daemon - Compatible with v2.18.10
+########################################################################
 
-# Chế độ ghi log: 2 = cả mạng và file
-LoggingMode = 2
-
-# Đường dẫn lưu file log
-#OfflineTracePath = /tmp/dlt_storage/
-
-# Kích thước tối đa mỗi file (bytes) - ví dụ 10MB
+# Offline trace storage
+OfflineTraceDirectory = /var/log/dlt
 OfflineTraceFileSize = 10000000
+OfflineTraceMaxSize = 150000000
 
-# Số lượng file tối đa trước khi xoay vòng
-OfflineTraceFileNumber = 15
+# Verbose mode
+Verbose = 1
 
-# Bật server TCP cho DLT Viewer
-#TCPServer = true
-#TCPServerPort = 3490
-#TCPServerAddress = 0.0.0.0
-########################################
-# Network configuration - IMPORTANT!
-########################################
-# Enable remote connections via TCP/IP
-RemoteConnection = 1
+# Send serial header
+SendSerialHeader = 1
 
-# Port for DLT Viewer connections (default: 3490)
-RemotePort = 3490
+# Send context registration
+SendContextRegistration = 1
 
-# Accept connections from any IP (0.0.0.0)
+# Send message time
+SendMessageTime = 1
+
+# RS232 sync serial header
+RS232SyncSerialHeader = 1
+
+# TCP sync serial header  
+TCPSyncSerialHeader = 1
+
+# Gateway mode
+GatewayMode = 0
+
+# Injection mode
+InjectionMode = 1
+
+# Context settings (SUPPORTED options only)
+ContextLogLevel = 6
+ContextTraceStatus = 1
+ForceContextLogLevelAndTraceStatus = 0
+
+# Binding address (listen on all interfaces)
 BindAddress = 0.0.0.0
 
-# Maximum concurrent connections
-MaxConnections = 10
+# ECU ID
+ECUId = ECU1
 EOF
 
-# 2. Tệp /etc/systemd/system/dlt-daemon.service
+# 2. Tệp /etc/systemd/system/dlt-daemon.service - FIXED VERSION
 echo "--> Tạo tệp /etc/systemd/system/dlt-daemon.service..."
 cat > /etc/systemd/system/dlt-daemon.service << 'EOF'
 [Unit]
@@ -66,10 +90,17 @@ After=network.target
 
 [Service]
 Type=simple
+# Kill any existing dlt-daemon processes before starting
+ExecStartPre=/bin/sh -c 'pkill -9 dlt-daemon || true'
+ExecStartPre=/bin/sh -c 'sleep 1'
+ExecStartPre=/bin/mkdir -p /var/log/dlt
+ExecStartPre=/bin/chmod 755 /var/log/dlt
 ExecStart=/usr/bin/dlt-daemon -c /etc/dlt.conf
 Restart=always
 RestartSec=5
 User=root
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -97,6 +128,19 @@ cleanup_old() {
 
 # Trap signals để cleanup properly
 trap "kill $PID 2>/dev/null; exit 0" SIGTERM SIGINT
+
+# Đợi dlt-daemon khởi động
+echo "Waiting for dlt-daemon to start..."
+for i in {1..30}; do
+    if pgrep -x dlt-daemon > /dev/null; then
+        echo "dlt-daemon is running"
+        break
+    fi
+    sleep 1
+done
+
+# Đợi thêm 2 giây để daemon hoàn toàn sẵn sàng
+sleep 2
 
 LOG_FILE="$LOG_DIR/agv_$(date +%Y%m%d_%H%M%S).dlt"
 echo "Logging to: $LOG_FILE"
@@ -129,7 +173,7 @@ while kill -0 $PID 2>/dev/null; do
             echo "Rotated to: $LOG_FILE (retry: $RETRY_COUNT)"
         fi
     fi
-    sleep 60  # Tăng lên 60s để giảm tải CPU
+    sleep 60  # Check every 60 seconds
 done
 EOF
 
@@ -145,7 +189,7 @@ Requires=dlt-daemon.service
 Type=simple
 ExecStart=/usr/local/bin/dlt-auto-logger.sh
 Restart=always
-RestartSec=5
+RestartSec=10
 # Thêm giới hạn tài nguyên
 MemoryLimit=500M
 CPUQuota=50%
@@ -160,19 +204,34 @@ EOF
 echo "--> Tạo tệp /usr/local/bin/dlt-view-logs.sh..."
 cat > /usr/local/bin/dlt-view-logs.sh << 'EOF'
 #!/bin/bash
-echo "Các tệp log DLT hiện có:"
-ls -lh /var/log/dlt/*.dlt 2>/dev/null || echo "No log files yet"
+echo "==================================================="
+echo "DLT Log Viewer"
+echo "==================================================="
 echo ""
-echo "To view latest log:"
+echo "Các tệp log DLT hiện có:"
+ls -lh /var/log/dlt/*.dlt 2>/dev/null || echo "  (No log files yet)"
+echo ""
+echo "---------------------------------------------------"
+echo "Để xem log mới nhất:"
 LATEST_LOG=$(ls -t /var/log/dlt/agv_*.dlt 2>/dev/null | head -n 1)
 if [ -n "$LATEST_LOG" ]; then
     echo "  dlt-convert -a \"$LATEST_LOG\" | tail -50"
+    echo ""
+    echo "Hoặc xem trực tiếp 20 dòng cuối:"
+    echo "---------------------------------------------------"
+    dlt-convert -a "$LATEST_LOG" 2>/dev/null | tail -20
 else
     echo "  (No log file found)"
 fi
 echo ""
-echo "To follow logs in real-time:"
+echo "---------------------------------------------------"
+echo "Để theo dõi logs real-time:"
 echo "  dlt-receive -a localhost"
+echo ""
+echo "Trạng thái dịch vụ:"
+systemctl is-active dlt-daemon.service | xargs echo "  dlt-daemon:"
+systemctl is-active dlt-logger.service | xargs echo "  dlt-logger:"
+echo "==================================================="
 EOF
 
 # 6. Tệp /etc/cron.d/dlt-cleanup
@@ -191,7 +250,7 @@ After=dlt-logger.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c "mkdir -p /tmp/dlt /var/log/dlt; chmod 777 /tmp/dlt; chmod 755 /var/log/dlt; exit 0"
+ExecStart=/bin/sh -c "mkdir -p /tmp/dlt /var/log/dlt; chmod 777 /tmp/dlt 2>/dev/null || true; chmod 755 /var/log/dlt; exit 0"
 RemainAfterExit=true
 
 [Install]
@@ -215,6 +274,7 @@ WorkingDirectory=/home/$REAL_USER/Documents/Mark_I
 StandardOutput=inherit
 StandardError=inherit
 Restart=always
+RestartSec=5
 User=$REAL_USER
 
 [Install]
@@ -223,9 +283,9 @@ EOF
 
 echo "===================================================="
 # --- Bước 2: Cấp quyền thực thi ---
-echo ">> Bước 2: Cấp quyền thực thi 777 cho các script..."
-sudo chmod 755 /usr/local/bin/dlt-auto-logger.sh
-sudo chmod 755 /usr/local/bin/dlt-view-logs.sh
+echo ">> Bước 2: Cấp quyền thực thi cho các script..."
+chmod 755 /usr/local/bin/dlt-auto-logger.sh
+chmod 755 /usr/local/bin/dlt-view-logs.sh
 echo "OK"
 echo "===================================================="
 
@@ -233,39 +293,56 @@ echo "===================================================="
 echo ">> Bước 3: Tải lại, kích hoạt và khởi động các dịch vụ systemd..."
 
 # Tải lại daemon để nhận diện các file service mới
-sudo systemctl daemon-reload
+systemctl daemon-reload
 
 # Kích hoạt các dịch vụ để tự khởi động cùng hệ thống
 echo "--> Kích hoạt các dịch vụ..."
-sudo systemctl enable dlt-daemon.service
-sudo systemctl enable dlt-logger.service
-sudo systemctl enable dlt-permissions.service
-sudo systemctl enable control_system_agv.service
+systemctl enable dlt-daemon.service
+systemctl enable dlt-logger.service
+systemctl enable dlt-permissions.service
+systemctl enable control_system_agv.service
 
 # Khởi động lại các dịch vụ theo đúng thứ tự
 echo "--> Khởi động lại các dịch vụ (có thể mất vài giây)..."
-sudo systemctl restart dlt-daemon.service
+systemctl restart dlt-daemon.service
 sleep 3
-sudo systemctl restart dlt-logger.service
+systemctl restart dlt-logger.service
 sleep 3
-sudo systemctl restart dlt-permissions.service
-sleep 3
-sudo systemctl restart control_system_agv.service
+systemctl restart dlt-permissions.service
+sleep 2
+systemctl restart control_system_agv.service
+sleep 2
 echo "OK"
 echo "===================================================="
 
 # --- Bước 4: Kiểm tra trạng thái các dịch vụ ---
 echo ">> Bước 4: Kiểm tra trạng thái các dịch vụ đã cài đặt..."
 echo ""
-sudo systemctl status dlt-daemon.service --no-pager
+echo ">>> DLT Daemon Status:"
+systemctl status dlt-daemon.service --no-pager -l
+echo ""
 echo "----------------------------------------------------"
-sudo systemctl status dlt-logger.service --no-pager
+echo ">>> DLT Logger Status:"
+systemctl status dlt-logger.service --no-pager -l
+echo ""
 echo "----------------------------------------------------"
-sudo systemctl status dlt-permissions.service --no-pager
+echo ">>> DLT Permissions Status:"
+systemctl status dlt-permissions.service --no-pager -l
+echo ""
 echo "----------------------------------------------------"
-sudo systemctl status control_system_agv.service --no-pager
+echo ">>> Control System AGV Status:"
+systemctl status control_system_agv.service --no-pager -l
 
+echo ""
 echo "===================================================="
 echo ">> Quá trình cài đặt đã hoàn tất!"
-echo "Sử dụng 'dlt-view-logs.sh' để xem các lệnh kiểm tra log."
-
+echo "===================================================="
+echo ""
+echo "Các lệnh hữu ích:"
+echo "  - Xem logs:              dlt-view-logs.sh"
+echo "  - Theo dõi real-time:    dlt-receive -a localhost"
+echo "  - Restart dịch vụ:       sudo systemctl restart dlt-daemon"
+echo "  - Xem log systemd:       sudo journalctl -u dlt-daemon -f"
+echo "  - Kiểm tra port 3490:    sudo netstat -tulpn | grep 3490"
+echo ""
+echo "===================================================="
