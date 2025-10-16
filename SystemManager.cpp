@@ -6,6 +6,14 @@
 #include <algorithm>
 #include <sstream>
 
+#if TEST_KEYBOARD_MODE == 1
+#include <linux/input.h>  // Cho input_event
+#include <fcntl.h>
+#include <unistd.h>
+#include <dirent.h>
+#include <cstring>
+#endif
+
 /**
  * @brief Hàm khởi tạo của lớp SystemManager.
  * @details Khởi tạo đối tượng giao tiếp với server `CommunicationServer` với địa chỉ IP và cổng được cung cấp.
@@ -241,6 +249,11 @@ void SystemManager::run() {
     threads_.emplace_back(&SystemManager::battery_thread_func, this);
     threads_.emplace_back(&SystemManager::imu_thread_func, this);
     threads_.emplace_back(&SystemManager::heading_correction_thread, this);
+#if TEST_KEYBOARD_MODE == 1
+    threads_.emplace_back(&SystemManager::keyboard_control_thread, this);
+    
+    LOG_INFO << "[SystemManager] ⌨️  USB Keyboard control enabled (W/A/S/D/B)";  
+#endif 
     // Luồng server_communication_thread được quản lý bên trong lớp CommunicationServer.
 
     // Vòng lặp chính chỉ để giám sát và báo cáo trạng thái.
@@ -249,11 +262,15 @@ void SystemManager::run() {
         {
             std::lock_guard<std::mutex> lock(state_.state_mutex);
             LOG_INFO << "--- SYSTEM STATUS ---";
-            LOG_INFO << "PLC Connected: " << (state_.plc_connected ? "Yes" : "No");
-            LOG_INFO << "LiDAR Connected: " << (state_.lidar_connected ? "Yes" : "No");
-            LOG_INFO << "Server Connected: " << (state_.server_connected ? "Yes" : "No");
-            LOG_INFO << "Last LiDAR Data: " << state_.last_lidar_data;
-            LOG_INFO << "Last IMU Data: " << state_.last_imu_data;
+            LOG_INFO << "PLC Connected: " << (state_.plc_connected ? "Yes" : "No")
+                     << " | LiDAR Connected: " << (state_.lidar_connected ? "Yes" : "No")
+                     << " | Server Connected: " << (state_.server_connected ? "Yes" : "No")
+                     << " | Last LiDAR Data: " << state_.last_lidar_data
+                     << " | Last IMU Data: " << state_.last_imu_data;
+            LOG_INFO << "Heading: " << std::fixed << std::setprecision(1) 
+                     << state_.current_heading << "° | Safe: " 
+                     << (state_.is_safe_to_move ? "Yes" : "No")
+                     << " | Moving: " << (state_.is_moving ? "Yes" : "No");
             LOG_INFO << "---------------------";
         }
     }
@@ -1410,6 +1427,320 @@ void SystemManager::heading_correction_thread() {
     
     LOG_INFO << "[Heading Correction] Thread stopped";
 }
+
+#if TEST_KEYBOARD_MODE == 1
+/**
+ * @brief Tìm device bàn phím USB trong /dev/input/
+ * @return Đường dẫn đến device (vd: /dev/input/event0) hoặc rỗng nếu không tìm thấy
+ */
+std::string SystemManager::findKeyboardDevice() {
+    DIR* dir = opendir("/dev/input");
+    if (!dir) {
+        LOG_ERROR << "[Keyboard] Cannot open /dev/input";
+        return "";
+    }
+    
+    struct dirent* entry;
+    std::string found_device;
+    
+    while ((entry = readdir(dir)) != nullptr) {
+        // Chỉ kiểm tra các file event*
+        if (strncmp(entry->d_name, "event", 5) != 0) {
+            continue;
+        }
+        
+        std::string device_path = std::string("/dev/input/") + entry->d_name;
+        int fd = open(device_path.c_str(), O_RDONLY);
+        
+        if (fd < 0) {
+            continue;
+        }
+        
+        char name[256] = "Unknown";
+        ioctl(fd, EVIOCGNAME(sizeof(name)), name);
+        
+        // Tìm bàn phím (chứa "keyboard" hoặc "Keyboard")
+        std::string device_name(name);
+        std::transform(device_name.begin(), device_name.end(), device_name.begin(), ::tolower);
+        
+        if (device_name.find("keyboard") != std::string::npos) {
+            found_device = device_path;
+            LOG_INFO << "[Keyboard] Found keyboard: " << name << " at " << device_path;
+            close(fd);
+            break;
+        }
+        
+        close(fd);
+    }
+    
+    closedir(dir);
+    return found_device;
+}
+
+/**
+ * @brief Luồng điều khiển AGV bằng bàn phím USB (WASD + B)
+ * @details
+ * - Đọc trực tiếp từ /dev/input/eventX (raw input events)
+ * - Không cần terminal, hoạt động như service
+ * - W: Tiến
+ * - A: Xoay trái  
+ * - S: Lùi
+ * - D: Xoay phải
+ * - B: DỪNG (STOP)
+ * 
+ * Ghim vào CPU core 3
+ */
+void SystemManager::keyboard_control_thread() {
+    pin_thread_to_core(3);
+    LOG_INFO << "[Keyboard Control] Thread started";
+    
+    // Tìm bàn phím
+    std::string keyboard_device = findKeyboardDevice();
+    
+    if (keyboard_device.empty()) {
+        LOG_WARNING << "[Keyboard Control] No keyboard found. Thread disabled.";
+        LOG_WARNING << "[Keyboard Control] Please plug in a USB keyboard and restart service.";
+        return;
+    }
+    
+    // Mở device
+    int fd = open(keyboard_device.c_str(), O_RDONLY | O_NONBLOCK);
+    if (fd < 0) {
+        LOG_ERROR << "[Keyboard Control] Cannot open " << keyboard_device 
+                  << ": " << strerror(errno);
+        return;
+    }
+    
+    // LOG_INFO << "[Keyboard Control] ===================================";
+    // LOG_INFO << "[Keyboard Control]   ĐIỀU KHIỂN AGV BẰNG BÀN PHÍM   ";
+    // LOG_INFO << "[Keyboard Control] ===================================";
+    // LOG_INFO << "[Keyboard Control]   W - Tiến                        ";
+    // LOG_INFO << "[Keyboard Control]   S - Lùi                         ";
+    // LOG_INFO << "[Keyboard Control]   A - Xoay trái                   ";
+    // LOG_INFO << "[Keyboard Control]   D - Xoay phải                   ";
+    // LOG_INFO << "[Keyboard Control]   B - DỪNG                        ";
+    // LOG_INFO << "[Keyboard Control] ===================================";
+    
+    struct input_event ev;
+    char last_command = '\0';
+    
+    while (running_) {
+        ssize_t bytes = read(fd, &ev, sizeof(ev));
+        
+        if (bytes < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Không có dữ liệu, sleep ngắn
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                continue;
+            } else {
+                LOG_ERROR << "[Keyboard Control] Read error: " << strerror(errno);
+                break;
+            }
+        }
+        
+        if (bytes != sizeof(ev)) {
+            continue;
+        }
+        
+        // Chỉ xử lý key press events (EV_KEY, value=1)
+        if (ev.type != EV_KEY || ev.value != 1) {
+            continue;
+        }
+        
+        char command = '\0';
+        
+        // Map key codes sang commands
+        switch (ev.code) {
+            case KEY_W: command = 'w'; break;
+            case KEY_A: command = 'a'; break;
+            case KEY_S: command = 's'; break;
+            case KEY_D: command = 'd'; break;
+            case KEY_B: command = 'b'; break;
+            default: continue; // Bỏ qua các phím khác
+        }
+        
+        // Bỏ qua nếu trùng lệnh trước (trừ STOP)
+        if (command == last_command && command != 'b') {
+            continue;
+        }
+        
+        // Kiểm tra PLC
+        bool plc_ready = false;
+        {
+            std::lock_guard<std::mutex> lock(plc_ptr_mutex_);
+            plc_ready = (plc_ptr_ != nullptr && plc_ptr_->isConnected());
+        }
+        
+        if (!plc_ready) {
+            LOG_WARNING << "[Keyboard Control] PLC not connected! Command ignored.";
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+        
+        // Xử lý commands
+        switch (command) {
+            case 'w': {
+                // TIẾN
+                LOG_INFO << "[Keyboard Control] ⬆️  FORWARD";
+                
+                bool is_safe;
+                float current_heading;
+                {
+                    std::lock_guard<std::mutex> lock(state_.state_mutex);
+                    is_safe = state_.is_safe_to_move;
+                    current_heading = state_.current_heading;
+                    state_.movement_command_active = true;
+                    state_.is_moving = false;
+                }
+                
+                if (is_safe) {
+                    // Lưu heading target
+                    {
+                        std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                        current_movement_.is_active = true;
+                        current_movement_.target_heading = current_heading;
+                        current_movement_.heading_tolerance = 2.0f;
+                        current_movement_.is_forward = true;
+                        current_movement_.start_time = std::chrono::steady_clock::now();
+                        heading_pid_.reset();
+                    }
+                    
+                    {
+                        std::lock_guard<std::mutex> lock(last_command_mutex_);
+                        last_movement_command_ = "WRITE_D100_1";
+                    }
+                    
+                    plc_command_queue_.push("WRITE_D101_0");
+                    plc_command_queue_.push("WRITE_D100_1");
+                    
+                    LOG_INFO << "[Keyboard Control] Target heading locked: " << current_heading << "°";
+                } else {
+                    LOG_WARNING << "[Keyboard Control] Không an toàn! Có vật cản phía trước.";
+                }
+                last_command = command;
+                break;
+            }
+            
+            case 's': {
+                // LÙI
+                LOG_INFO << "[Keyboard Control] REVERSE";
+                
+                float current_heading;
+                {
+                    std::lock_guard<std::mutex> lock(state_.state_mutex);
+                    current_heading = state_.current_heading;
+                    state_.movement_command_active = true;
+                    state_.is_moving = false;
+                }
+                
+                {
+                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                    current_movement_.is_active = true;
+                    current_movement_.target_heading = current_heading;
+                    current_movement_.heading_tolerance = 3.0f;
+                    current_movement_.is_forward = false;
+                    current_movement_.start_time = std::chrono::steady_clock::now();
+                    heading_pid_.reset();
+                }
+                
+                {
+                    std::lock_guard<std::mutex> lock(last_command_mutex_);
+                    last_movement_command_ = "WRITE_D100_2";
+                }
+                
+                plc_command_queue_.push("WRITE_D101_0");
+                plc_command_queue_.push("WRITE_D100_2");
+                
+                LOG_INFO << "[Keyboard Control] Reverse target heading: " << current_heading << "°";
+                last_command = command;
+                break;
+            }
+            
+            case 'a': {
+                // XOAY TRÁI
+                LOG_INFO << "[Keyboard Control] ROTATE LEFT";
+                
+                {
+                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                    current_movement_.is_active = false;
+                    heading_pid_.reset();
+                }
+                
+                {
+                    std::lock_guard<std::mutex> lock(state_.state_mutex);
+                    state_.movement_command_active = true;
+                    state_.is_moving = false;
+                }
+                
+                plc_command_queue_.push("WRITE_D100_1");
+                plc_command_queue_.push("WRITE_D101_1");
+                
+                last_command = command;
+                break;
+            }
+            
+            case 'd': {
+                // XOAY PHẢI
+                LOG_INFO << "[Keyboard Control] ROTATE RIGHT";
+                
+                {
+                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                    current_movement_.is_active = false;
+                    heading_pid_.reset();
+                }
+                
+                {
+                    std::lock_guard<std::mutex> lock(state_.state_mutex);
+                    state_.movement_command_active = true;
+                    state_.is_moving = false;
+                }
+                
+                plc_command_queue_.push("WRITE_D100_1");
+                plc_command_queue_.push("WRITE_D101_2");
+                
+                last_command = command;
+                break;
+            }
+            
+            case 'b': {
+                // DỪNG
+                LOG_INFO << "[Keyboard Control] STOP";
+                
+                {
+                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                    current_movement_.is_active = false;
+                    heading_pid_.reset();
+                }
+                
+                plc_command_queue_.push("WRITE_D100_0");
+                plc_command_queue_.push("WRITE_D101_0");
+                plc_command_queue_.push("WRITE_D104_0");
+                plc_command_queue_.push("WRITE_D105_0");
+                
+                {
+                    std::lock_guard<std::mutex> lock(last_command_mutex_);
+                    last_movement_command_.clear();
+                }
+                
+                {
+                    std::lock_guard<std::mutex> lock(state_.state_mutex);
+                    state_.movement_command_active = false;
+                    state_.is_moving = false;
+                }
+                
+                last_command = '\0'; // Reset để cho phép dừng liên tục
+                break;
+            }
+        }
+    }
+    
+    close(fd);
+    LOG_INFO << "[Keyboard Control] Thread stopped";
+}
+
+#endif
+
+
 // Lưu ý: Luồng server_communication_thread không còn được quản lý trực tiếp ở đây.
 // Nó được quản lý bên trong lớp ServerComm::CommunicationServer,
 // vốn sử dụng các luồng riêng (`std::thread`) để xử lý I/O mạng một cách bất đồng bộ.

@@ -57,3 +57,16 @@
 #define SPEED_STEP 100
 #define ACCEL_TIME_MS 2000
 #define MIN_START_SPEED 200
+
+#define TEST_KEYBOARD_MODE 1
+// Cấp quyền đọc input device
+// Tạo udev rule để service có quyền đọc keyboard:
+// sudo nano /etc/udev/rules.d/99-input.rules
+// Thêm nội dung:
+// KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"
+//
+// Apply rule:
+// sudo udevadm control --reload-rules
+// sudo udevadm trigger
+
+//

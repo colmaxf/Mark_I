@@ -11,6 +11,10 @@
 #include <chrono>
 #include <boost/lockfree/spsc_queue.hpp>
 
+#if TEST_KEYBOARD_MODE == 1
+#include <linux/input.h>  // Cho input_event
+#endif
+
 #include "config.h"
 #include "logger/Logger.h"
 #include "MCprotocollib/MCprotocol.h"
@@ -145,8 +149,21 @@ private:
     int calculateSmoothSpeed(float distance_cm, bool movement_active);
     /** @brief Phân tích và thực thi một chuỗi lệnh trên PLC. */
     std::string parseAndExecutePlcCommand(const std::string& command, MCProtocol& plc);
-
+    
+    /**
+     * @brief Thread loop that monitors and corrects the system heading.
+     */
     void heading_correction_thread();
+
+#if TEST_KEYBOARD_MODE == 1
+    // Cấp quyền đọc input device
+    // Tạo udev rule để service có quyền đọc keyboard:
+    // SUBSYSTEM=="input", KERNEL=="event*", MODE="660", GROUP="input"
+    // sudo usermod -a -G input <username>
+    /** @brief Luồng đọc lệnh từ bàn phím để điều khiển AGV*/
+    void keyboard_control_thread();
+    std::string findKeyboardDevice();
+#endif      
 
     // --- Biến thành viên ---
     SystemState state_; ///< Đối tượng trạng thái chung, được chia sẻ giữa các luồng.
