@@ -3,7 +3,7 @@
 
 
 //===================== Cấu hình hệ thống ==================---//
-#define AGV_ID 1
+#define AGV_ID 2
 
 #if AGV_ID == 1
     //Config AGV 1

@@ -70,6 +70,7 @@ struct SystemState {
     int current_speed = 0; ///< Tốc độ hiện tại của AGV.
     int target_speed = 0; ///< Tốc độ mục tiêu mà AGV đang hướng tới.
     bool movement_command_active = false;  ///< Cờ này được set khi có lệnh di chuyển (tiến/lùi/xoay) và reset khi dừng.
+    bool movement_pending = false; ///< Cờ báo hiệu một lệnh di chuyển mới vừa được đưa ra, đang chờ PLC thực thi.
 
     // Dữ liệu IMU
     bool imu_connected = false;
