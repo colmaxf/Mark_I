@@ -249,6 +249,15 @@ private:
     };
     
     HeadingPID heading_pid_;
+
+    // Arc turn control
+    enum class ArcDirection {
+        NONE,
+        LEFT,
+        RIGHT
+    };
+    ArcDirection arc_direction_;
+    std::mutex arc_direction_mutex_;
     
     // Helper functions
     float normalizeAngle(float angle);

@@ -23,7 +23,8 @@
  */
 SystemManager::SystemManager(const std::string& server_ip, int server_port) : 
     comm_server_(std::make_unique<ServerComm::CommunicationServer>(server_ip, server_port)),
-    last_processed_cmd_type_(ServerComm::NavigationCommand::STOP) // Khởi tạo lệnh cuối cùng là STOP
+    last_processed_cmd_type_(ServerComm::NavigationCommand::STOP), // Khởi tạo lệnh cuối cùng là STOP
+    arc_direction_(ArcDirection::NONE)
 {}
 
 /**
@@ -779,6 +780,31 @@ if (is_reversing) {
              << ", Target: " << target.target_heading << "°"
              << ", Error: " << heading_error << "°";
 }
+
+// =================================================================
+// LOGIC RẼ VÒNG CUNG (ARC TURN)
+// =================================================================
+ArcDirection direction;
+{
+    std::lock_guard<std::mutex> lock(arc_direction_mutex_);
+    direction = arc_direction_;
+}
+
+if (direction != ArcDirection::NONE) {
+    int outer_speed = base_speed;
+    int inner_speed = base_speed / 2; // Bánh trong chạy bằng nửa tốc độ
+
+    if (direction == ArcDirection::LEFT) {
+        LOG_INFO << "[LIDAR/ARC] Arc Left - BaseSpeed: " << base_speed << " -> L:" << outer_speed << ", R:" << inner_speed;
+        plc_command_queue_.push("WRITE_D104_" + std::to_string(outer_speed)); // Bánh trái (ngoài)
+        plc_command_queue_.push("WRITE_D105_" + std::to_string(inner_speed)); // Bánh phải (trong)
+    } else { // ArcDirection::RIGHT
+        LOG_INFO << "[LIDAR/ARC] Arc Right - BaseSpeed: " << base_speed << " -> L:" << inner_speed << ", R:" << outer_speed;
+        plc_command_queue_.push("WRITE_D104_" + std::to_string(inner_speed)); // Bánh trái (trong)
+        plc_command_queue_.push("WRITE_D105_" + std::to_string(outer_speed)); // Bánh phải (ngoài)
+    }
+}
+
 // =================================================================
 // KẾT THÚC LOGIC HEADING CORRECTION
 // =================================================================
@@ -961,32 +987,31 @@ void SystemManager::command_handler_thread() {
                 }
                 
                 case ServerComm::NavigationCommand::ROTATE_TO_LEFT:
-                case ServerComm::NavigationCommand::ROTATE_TO_RIGHT: {
-                    LOG_INFO << "[Command Handler] Processing rotation command";
+                case ServerComm::NavigationCommand::ROTATE_TO_RIGHT: 
+                {
+                    LOG_INFO << "[Command Handler] Processing arc rotation command";
 
-                    // LOG GÓC HIỆN TẠI TRƯỚC KHI XOAY
-                    {
-                        std::lock_guard<std::mutex> lock(state_.state_mutex);
-                        LOG_INFO << "[Command Handler] Current heading before rotation: "
-                                 << std::fixed << std::setprecision(2)
-                                 << state_.current_heading << "°";
-                    }
-                    
-                    // VÔ HIỆU HÓA heading correction khi xoay
+                    // Tắt heading correction vì chúng ta chủ động muốn thay đổi hướng
                     {
                         std::lock_guard<std::mutex> lock(movement_target_mutex_);
                         current_movement_.is_active = false;
                     }
+
+                    // Đặt trạng thái rẽ vòng cung
+                    {
+                        std::lock_guard<std::mutex> lock(arc_direction_mutex_);
+                        arc_direction_ = (cmd.type == ServerComm::NavigationCommand::ROTATE_TO_LEFT) ? ArcDirection::LEFT : ArcDirection::RIGHT;
+                    }
                     
                     if (is_safe) {
-                        std::lock_guard<std::mutex> lock(state_.state_mutex);
-                        state_.movement_command_active = true;
-                        state_.is_moving = false;
-
-                        plc_command_queue_.push("WRITE_D100_1");
-                        std::string rotate_cmd = cmd.type == ServerComm::NavigationCommand::ROTATE_TO_LEFT 
-                                                ? "WRITE_D101_1" : "WRITE_D101_2";
-                        plc_command_queue_.push(rotate_cmd);
+                        {
+                            std::lock_guard<std::mutex> lock(state_.state_mutex);
+                            state_.movement_command_active = true;
+                            state_.is_moving = true; // Bắt đầu di chuyển ngay
+                            state_.movement_pending = true;
+                        }
+                    } else {
+                        LOG_WARNING << "[Command Handler] Cannot execute rotation - obstacle detected!";
                     }
                     break;
                 }
@@ -1707,64 +1732,54 @@ void SystemManager::keyboard_control_thread() {
             }
             
             case 'a': {// D105 giảm
-                // XOAY TRÁI
-                LOG_INFO << "[Keyboard Control] ROTATE LEFT";
+                // XOAY TRÁI THEO VÒNG CUNG
+                LOG_INFO << "[Keyboard Control] ARC LEFT";
                 
-                // LOG GÓC HIỆN TẠI TRƯỚC KHI XOAY
-                {
-                    std::lock_guard<std::mutex> lock(state_.state_mutex);
-                    LOG_INFO << "[Keyboard Control] Current heading before rotation: "
-                             << std::fixed << std::setprecision(2)
-                             << state_.current_heading << "°";
-                }
-
+                // Tắt heading correction
                 {
                     std::lock_guard<std::mutex> lock(movement_target_mutex_);
                     current_movement_.is_active = false;
-                    heading_pid_.reset();
+                }
+
+                // Đặt trạng thái rẽ vòng cung
+                {
+                    std::lock_guard<std::mutex> lock(arc_direction_mutex_);
+                    arc_direction_ = ArcDirection::RIGHT;
                 }
                 
                 {
                     std::lock_guard<std::mutex> lock(state_.state_mutex);
                     state_.movement_command_active = true;
-                    state_.is_moving = false;
-                    state_.movement_pending = true; // Báo hiệu có lệnh di chuyển mới
+                    state_.is_moving = true;
+                    state_.movement_pending = true;
                 }
-                
-                plc_command_queue_.push("WRITE_D100_1");
-                plc_command_queue_.push("WRITE_D101_1");
                 
                 last_command = command;
                 break;
             }
             
             case 'd': { //D104 giảm
-                // XOAY PHẢI
-                LOG_INFO << "[Keyboard Control] ROTATE RIGHT";
+                // XOAY PHẢI THEO VÒNG CUNG
+                LOG_INFO << "[Keyboard Control] ARC RIGHT";
                 
-                // LOG GÓC HIỆN TẠI TRƯỚC KHI XOAY
-                {
-                    std::lock_guard<std::mutex> lock(state_.state_mutex);
-                    LOG_INFO << "[Keyboard Control] Current heading before rotation: "
-                             << std::fixed << std::setprecision(2)
-                             << state_.current_heading << "°";
-                }
-
+                // Tắt heading correction
                 {
                     std::lock_guard<std::mutex> lock(movement_target_mutex_);
                     current_movement_.is_active = false;
-                    heading_pid_.reset();
+                }
+
+                // Đặt trạng thái rẽ vòng cung
+                {
+                    std::lock_guard<std::mutex> lock(arc_direction_mutex_);
+                    arc_direction_ = ArcDirection::LEFT;
                 }
                 
                 {
                     std::lock_guard<std::mutex> lock(state_.state_mutex);
                     state_.movement_command_active = true;
-                    state_.is_moving = false;
-                    state_.movement_pending = true; // Báo hiệu có lệnh di chuyển mới
+                    state_.is_moving = true;
+                    state_.movement_pending = true;
                 }
-                
-                plc_command_queue_.push("WRITE_D100_1");
-                plc_command_queue_.push("WRITE_D101_2");
                 
                 last_command = command;
                 break;
