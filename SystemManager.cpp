@@ -633,47 +633,63 @@ void SystemManager::lidar_thread_func() {
 
             // Nếu không có điểm nào ở phía trước, bỏ qua.
             if (min_front >= 999.0f) return;
+float min_dist_cm = min_front * 100.0f; // Chuyển từ mét sang cm
+int smooth_speed = 0;
+bool movement_active = false;
+bool is_safe = false;
+bool is_reversing = false;
 
-            float min_dist_cm = min_front * 100.0f; // Chuyển từ mét sang cm.
-            int smooth_speed = 0; // Tốc độ mượt mà để gửi đến PLC.
-            bool movement_active = false; // Cờ lệnh di chuyển hiện tại.
-             bool is_safe = false;
-            bool is_reversing = false; // Thêm cờ để biết có đang lùi không
-
-            // Khóa mutex để cập nhật và đọc state_ một cách an toàn.
-            {
-                std::lock_guard<std::mutex> lock(state_.state_mutex); // Khóa state_mutex để truy cập state_.
-                state_.current_front_distance = min_dist_cm; // Cập nhật khoảng cách phía trước.
-                state_.is_safe_to_move = min_dist_cm > EMERGENCY_STOP_DISTANCE_CM; // Cập nhật trạng thái an toàn.
-                state_.last_safety_update = std::chrono::steady_clock::now().time_since_epoch().count(); // Cập nhật thời gian.
-                movement_active = state_.movement_command_active; // Lấy trạng thái lệnh di chuyển hiện tại.
-                is_safe = state_.is_safe_to_move; // Lấy trạng thái an toàn hiện tại.
-                // Kiểm tra xem có đang lùi không
-                {
-                    std::lock_guard<std::mutex> lock_movement(movement_target_mutex_);
-                    is_reversing = current_movement_.is_active && !current_movement_.is_forward;
-                } 
-                LOG_INFO << "[Lidar Thread] is_reversing: " << (is_reversing ? "Yes" : "No");
-
-
-                // Cập nhật chuỗi trạng thái LiDAR để ghi log
-                std::stringstream ss;
-                ss << "Points: " << points.size()
-                   << ", FrontDist: " << std::fixed << std::setprecision(1)
-                   << min_dist_cm << "cm, Safe: " << (state_.is_safe_to_move ? "Yes" : "No");
-                state_.last_lidar_data = ss.str();
-                LOG_INFO << "[LIDAR Thread][REALTIMECALLBACK] state_.last_lidar_data: " << state_.last_lidar_data;
-                // Tính toán tốc độ mượt mà dựa trên trạng thái an toàn và lệnh di chuyển.
-                     // Nếu đang lùi, bỏ qua kiểm tra an toàn phía trước.
-                // Nếu đang tiến, phải đảm bảo an toàn.
-                if (movement_active && (is_reversing || state_.is_safe_to_move)) { 
-                    smooth_speed = calculateSmoothSpeed(min_dist_cm, true); // movement_active = true
-                } else {
-                    smooth_speed = calculateSmoothSpeed(min_dist_cm, false); // movement_active = false
-                }
-                 // LƯU smooth_speed vào state để heading correction dùng
-                state_.current_speed = smooth_speed;
-            }
+// Khóa mutex để cập nhật và đọc state_ một cách an toàn
+{
+    std::lock_guard<std::mutex> lock(state_.state_mutex);
+    state_.current_front_distance = min_dist_cm;
+    state_.is_safe_to_move = min_dist_cm > EMERGENCY_STOP_DISTANCE_CM;
+    state_.last_safety_update = std::chrono::steady_clock::now().time_since_epoch().count();
+    movement_active = state_.movement_command_active;
+    is_safe = state_.is_safe_to_move;
+    
+    // Kiểm tra xem có đang lùi không
+    {
+        std::lock_guard<std::mutex> lock_movement(movement_target_mutex_);
+        is_reversing = current_movement_.is_active && !current_movement_.is_forward;
+    }
+    
+    LOG_INFO << "[Lidar Thread] is_reversing: " << (is_reversing ? "Yes" : "No")
+             << ", is_safe: " << (is_safe ? "Yes" : "No")
+             << ", movement_active: " << (movement_active ? "Yes" : "No");
+    
+    // Cập nhật chuỗi trạng thái LiDAR
+    std::stringstream ss;
+    ss << "Points: " << points.size()
+       << ", FrontDist: " << std::fixed << std::setprecision(1)
+       << min_dist_cm << "cm, Safe: " << (state_.is_safe_to_move ? "Yes" : "No");
+    state_.last_lidar_data = ss.str();
+    LOG_INFO << "[LIDAR Thread][REALTIMECALLBACK] state_.last_lidar_data: " << state_.last_lidar_data;
+    
+    // QUAN TRỌNG: Logic tính toán tốc độ mượt mà
+    if (movement_active) {
+        if (is_reversing) {
+            // Khi lùi: LUÔN cho phép di chuyển bất kể có vật cản hay không
+            // Sử dụng tốc độ cố định hoặc tính toán dựa trên khoảng cách phía sau (nếu có sensor)
+            smooth_speed = 800;  // Tốc độ lùi mặc định (có thể điều chỉnh)
+            LOG_INFO << "[Lidar Thread] Reversing with speed: " << smooth_speed;
+        } else if (is_safe) {
+            // Khi tiến: Chỉ di chuyển nếu an toàn
+            smooth_speed = calculateSmoothSpeed(min_dist_cm, true);
+            LOG_INFO << "[Lidar Thread] Moving forward with speed: " << smooth_speed;
+        } else {
+            // Khi tiến nhưng không an toàn: Dừng
+            smooth_speed = 0;
+            LOG_WARNING << "[Lidar Thread] Forward blocked! Speed set to 0";
+        }
+    } else {
+        // Không có lệnh di chuyển
+        smooth_speed = calculateSmoothSpeed(min_dist_cm, false);
+    }
+    
+    // Lưu smooth_speed vào state để heading correction dùng
+    state_.current_speed = smooth_speed;
+}
 
             // Chỉ gửi lệnh tốc độ đến PLC nếu giá trị tốc độ thay đổi để giảm tải.
             static int last_sent_safety = -1;
@@ -686,62 +702,86 @@ void SystemManager::lidar_thread_func() {
             }
 
             // =================================================================
-            // LOGIC HEADING CORRECTION ĐƯỢC TÍCH HỢP VÀO ĐÂY
-            // =================================================================
-            MovementTarget target;
-            float current_heading;
+// LOGIC HEADING CORRECTION ĐƯỢC TÍCH HỢP VÀO ĐÂY
+// =================================================================
+MovementTarget target;
+float current_heading;
 
-            // Lấy thông tin movement target
-            {
-                std::lock_guard<std::mutex> lock(movement_target_mutex_);
-                target = current_movement_;
-            }
+// Lấy thông tin movement target
+{
+    std::lock_guard<std::mutex> lock(movement_target_mutex_);
+    target = current_movement_;
+    is_reversing = target.is_active && !target.is_forward;  // Kiểm tra đang lùi
+}
 
-            // Lấy heading và base_speed
-            // *** THAY ĐỔI QUAN TRỌNG: ***
-            // Sử dụng trực tiếp biến `smooth_speed` vừa được tính toán,
-            // thay vì đọc lại `state_.current_speed` (có thể là giá trị cũ).
-            int base_speed = smooth_speed;
+// Lấy heading và base_speed
+int base_speed = smooth_speed;  // Sử dụng smooth_speed vừa tính toán
 
-            {
-                std::lock_guard<std::mutex> lock(state_.state_mutex);
-                current_heading = state_.current_heading;
-                // is_safe đã được lấy ở trên
-            }
+{
+    std::lock_guard<std::mutex> lock(state_.state_mutex);
+    current_heading = state_.current_heading;
+}
 
-            // Nếu không có lệnh di chuyển, không làm gì thêm
-            if (!target.is_active) {
-                return;
-            }
+// Nếu không có lệnh di chuyển, không làm gì thêm
+if (!target.is_active) {
+    return;
+}
 
-            // Nếu không an toàn (khi đi tới) hoặc tốc độ = 0, dừng 2 bánh
-            if (base_speed == 0 || (target.is_forward && !is_safe)) {
-                plc_command_queue_.push("WRITE_D104_0");
-                plc_command_queue_.push("WRITE_D105_0");
-                LOG_INFO << "[LIDAR/Heading] Wheels stopped. Reason: base_speed=" << base_speed
-                         << ", is_forward=" << target.is_forward << ", is_safe=" << is_safe;
-                return;
-            }
+// QUAN TRỌNG: Sửa điều kiện dừng bánh xe
+// Chỉ dừng khi:
+// 1. Tốc độ = 0, HOẶC
+// 2. Đang tiến VÀ không an toàn (không áp dụng cho lùi)
+if (base_speed == 0 || (target.is_forward && !is_safe)) {
+    // Nếu đang lùi và base_speed = 0, vẫn cho phép lùi với tốc độ cố định
+    if (is_reversing && base_speed == 0) {
+        // Đặt tốc độ lùi cố định khi có vật cản
+        base_speed = 500;  // Tốc độ lùi chậm an toàn
+        LOG_INFO << "[LIDAR/Heading] Reversing with fixed speed due to obstacle: " << base_speed;
+    } else {
+        // Dừng bánh xe cho các trường hợp khác
+        plc_command_queue_.push("WRITE_D104_0");
+        plc_command_queue_.push("WRITE_D105_0");
+        LOG_INFO << "[LIDAR/Heading] Wheels stopped. Reason: base_speed=" << base_speed
+                 << ", is_forward=" << target.is_forward << ", is_safe=" << is_safe;
+        return;
+    }
+}
 
-            // Tính sai số góc
-            float heading_error = calculateHeadingError(current_heading, target.target_heading);
+// Tính sai số góc
+float heading_error = calculateHeadingError(current_heading, target.target_heading);
 
-            // Nếu lệch hướng, tính toán lại tốc độ 2 bánh
-            if (fabs(heading_error) > target.heading_tolerance) {
-                LOG_WARNING << "[LIDAR/Heading] Deviation! Err: " << heading_error << "°. Correcting...";
-                int left_speed, right_speed;
-                calculateDifferentialSpeed(heading_error, base_speed, left_speed, right_speed);
+// Nếu lệch hướng, tính toán lại tốc độ 2 bánh
+if (fabs(heading_error) > target.heading_tolerance) {
+    LOG_WARNING << "[LIDAR/Heading] Deviation! Err: " << heading_error << "°. Correcting...";
+    int left_speed, right_speed;
+    
+    // Khi lùi và có lệch hướng, điều chỉnh nhẹ nhàng hơn
+    if (is_reversing) {
+        // Giảm độ nhạy khi lùi bằng cách chia correction cho 2
+        float reduced_error = heading_error * 0.5f;
+        calculateDifferentialSpeed(reduced_error, base_speed, left_speed, right_speed);
+    } else {
+        calculateDifferentialSpeed(heading_error, base_speed, left_speed, right_speed);
+    }
+    
+    plc_command_queue_.push("WRITE_D104_" + std::to_string(left_speed));
+    plc_command_queue_.push("WRITE_D105_" + std::to_string(right_speed));
+} else {
+    // Nếu đi đúng hướng, 2 bánh cùng tốc độ
+    plc_command_queue_.push("WRITE_D104_" + std::to_string(base_speed));
+    plc_command_queue_.push("WRITE_D105_" + std::to_string(base_speed));
+}
 
-                plc_command_queue_.push("WRITE_D104_" + std::to_string(left_speed));
-                plc_command_queue_.push("WRITE_D105_" + std::to_string(right_speed));
-            } else {
-                // Nếu đi đúng hướng, 2 bánh cùng tốc độ
-                plc_command_queue_.push("WRITE_D104_" + std::to_string(base_speed));
-                plc_command_queue_.push("WRITE_D105_" + std::to_string(base_speed));
-            }
-            // =================================================================
-            // KẾT THÚC LOGIC HEADING CORRECTION
-            // =================================================================
+// Log thông tin debug
+if (is_reversing) {
+    LOG_INFO << "[LIDAR/Heading] Reversing - Speed: " << base_speed 
+             << ", Heading: " << current_heading << "°"
+             << ", Target: " << target.target_heading << "°"
+             << ", Error: " << heading_error << "°";
+}
+// =================================================================
+// KẾT THÚC LOGIC HEADING CORRECTION
+// =================================================================
         });
 
         // // Callback xử lý dữ liệu ổn định để gửi lên server.
@@ -1640,6 +1680,9 @@ void SystemManager::keyboard_control_thread() {
                     state_.is_moving = false;
                     state_.movement_pending = true; // Báo hiệu có lệnh di chuyển mới
                 }
+
+                plc_command_queue_.push("WRITE_D101_0");
+                plc_command_queue_.push("WRITE_D100_2");
                 
                 {
                     std::lock_guard<std::mutex> lock(movement_target_mutex_);
@@ -1656,15 +1699,14 @@ void SystemManager::keyboard_control_thread() {
                     last_movement_command_ = "WRITE_D100_2";
                 }
                 
-                plc_command_queue_.push("WRITE_D101_0");
-                plc_command_queue_.push("WRITE_D100_2");
+
                 
                 LOG_INFO << "[Keyboard Control] Reverse target heading: " << current_heading << "°";
                 last_command = command;
                 break;
             }
             
-            case 'a': {
+            case 'a': {// D105 giảm
                 // XOAY TRÁI
                 LOG_INFO << "[Keyboard Control] ROTATE LEFT";
                 
@@ -1696,7 +1738,7 @@ void SystemManager::keyboard_control_thread() {
                 break;
             }
             
-            case 'd': {
+            case 'd': { //D104 giảm
                 // XOAY PHẢI
                 LOG_INFO << "[Keyboard Control] ROTATE RIGHT";
                 
