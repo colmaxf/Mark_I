@@ -37,7 +37,7 @@
 //===================== Cấu hình hệ thống ==================---//
 
 //Battery port
-#define BATTERY_BMS_SERIAL_PORT "/dev/ttyAMA0"
+#define BATTERY_BMS_SERIAL_PORT "/dev/ttyAMA10"
 
 //Config chung
 #ifndef M_PI
@@ -55,7 +55,7 @@
 
 // Speed control
 #define SPEED_STEP 100
-#define ACCEL_TIME_MS 2000
+#define ACCEL_TIME_MS 10000 // 10s
 #define MIN_START_SPEED 200
 
 #define TEST_KEYBOARD_MODE 1

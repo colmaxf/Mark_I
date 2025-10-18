@@ -414,25 +414,24 @@ int SystemManager::calculateSmoothSpeed(float distance_cm, bool movement_active)
         state_.current_speed = MIN_START_SPEED; // Bắt đầu với tốc độ tối thiểu để tránh giật.
     }
 
-    // Nếu AGV đang trong quá trình di chuyển.
-    if (state_.is_moving)
-    {
-        // Tính thời gian đã trôi qua kể từ khi bắt đầu di chuyển.
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                           std::chrono::steady_clock::now() - state_.movement_start_time)
-                           .count();
+    // Nếu AGV đang đứng yên, trả về tốc độ khởi động tối thiểu ngay lập tức
+    if (state_.current_speed == 0 && state_.is_moving) {
+        state_.current_speed = MIN_START_SPEED;
+        return state_.current_speed;
+    }
 
-        // Giai đoạn tăng tốc: tăng tốc tuyến tính trong khoảng thời gian ACCEL_TIME_MS.
-        if (elapsed < ACCEL_TIME_MS)
-        {
-            float t = static_cast<float>(elapsed) / ACCEL_TIME_MS;
-            state_.current_speed = MIN_START_SPEED + static_cast<int>((target_speed - MIN_START_SPEED) * t);
-        }
-        else
-        {
-            // Sau giai đoạn tăng tốc, giữ tốc độ bằng tốc độ mục tiêu.
-            state_.current_speed = target_speed;
-        }
+    // Nếu AGV đang di chuyển, thực hiện tăng/giảm tốc mượt mà
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - state_.movement_start_time)
+                       .count();
+
+    // Giai đoạn tăng tốc: tăng tốc tuyến tính trong khoảng thời gian ACCEL_TIME_MS.
+    if (elapsed < ACCEL_TIME_MS) {
+        float t = static_cast<float>(elapsed) / ACCEL_TIME_MS;
+        state_.current_speed = MIN_START_SPEED + static_cast<int>((target_speed - MIN_START_SPEED) * t);
+    } else {
+        // Sau giai đoạn tăng tốc, giữ tốc độ bằng tốc độ mục tiêu.
+        state_.current_speed = target_speed;
     }
 
     // Nếu tốc độ mục tiêu giảm xuống dưới mức tối thiểu (và không có lệnh đang chờ), dừng AGV.
