@@ -709,6 +709,7 @@ void SystemManager::lidar_thread_func()
                                                  bool movement_active = false;
                                                  bool is_safe = false;
                                                  bool is_reversing = false;
+                                                 bool has_pending_movement = false;
 
                                                  // Khóa mutex để cập nhật và đọc state_ một cách an toàn
                                                  {
@@ -718,6 +719,8 @@ void SystemManager::lidar_thread_func()
                                                      state_.last_safety_update = std::chrono::steady_clock::now().time_since_epoch().count();
                                                      movement_active = state_.movement_command_active;
                                                      is_safe = state_.is_safe_to_move;
+                                                     has_pending_movement = state_.movement_pending;
+
 
                                                      // Kiểm tra xem có đang lùi không
                                                      {
@@ -738,20 +741,30 @@ void SystemManager::lidar_thread_func()
                                                      LOG_INFO << "[LIDAR Thread][REALTIMECALLBACK] state_.last_lidar_data: " << state_.last_lidar_data;
 
                                                      // QUAN TRỌNG: Logic tính toán tốc độ mượt mà
-                                                     if (movement_active)
+                                                     if (movement_active || has_pending_movement)
                                                      {
                                                          if (is_reversing)
                                                          {
                                                              // Khi lùi: LUÔN cho phép di chuyển bất kể có vật cản hay không
                                                              // Sử dụng tốc độ cố định hoặc tính toán dựa trên khoảng cách phía sau (nếu có sensor)
-                                                             smooth_speed = 800; // Tốc độ lùi mặc định (có thể điều chỉnh)
+                                                             smooth_speed = 300; // Tốc độ lùi mặc định (có thể điều chỉnh)
                                                              LOG_INFO << "[Lidar Thread] Reversing with speed: " << smooth_speed;
                                                          }
                                                          else if (is_safe)
                                                          {
                                                              // Khi tiến: Chỉ di chuyển nếu an toàn
                                                              smooth_speed = calculateSmoothSpeed(min_dist_cm, true);
-                                                             LOG_INFO << "[Lidar Thread] Moving forward with speed: " << smooth_speed;
+                                                            // QUAN TRỌNG: Xử lý trường hợp pending movement với speed = 0
+                                                             if (smooth_speed == 0 && has_pending_movement)
+                                                             {
+                                                                 smooth_speed = MIN_START_SPEED; // 500
+                                                                 state_.movement_pending = false; // Clear pending flag
+                                                                 LOG_INFO << "[Lidar Thread] Starting forward with initial speed: " << smooth_speed;
+                                                             }
+                                                             else
+                                                             {
+                                                                 LOG_INFO << "[Lidar Thread] Moving forward with speed: " << smooth_speed;
+                                                             }
                                                          }
                                                          else
                                                          {
