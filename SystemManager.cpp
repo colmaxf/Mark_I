@@ -386,6 +386,15 @@ double SystemManager::calculateSpeed(double distance)
  */
 int SystemManager::calculateSmoothSpeed(float distance_cm, bool movement_active)
 {
+    // Yêu cầu mới: Nếu đang lùi, luôn dùng tốc độ lùi cố định.
+    // Chúng ta sẽ dùng `calculateSmoothSpeed` để khởi động mượt mà đến tốc độ này.
+    bool is_reversing;
+    {
+        std::lock_guard<std::mutex> lock(movement_target_mutex_);
+        is_reversing = current_movement_.is_active && !current_movement_.is_forward;
+    }
+    int target_speed = is_reversing ? 200 : static_cast<int>(calculateSpeed(distance_cm));
+
     // Nếu không có lệnh di chuyển và không có lệnh đang chờ, dừng AGV.
     if (!movement_active && !state_.movement_pending)
     {
@@ -393,9 +402,6 @@ int SystemManager::calculateSmoothSpeed(float distance_cm, bool movement_active)
         state_.current_speed = 0;
         return 0;
     }
-
-    // Tính tốc độ mục tiêu dựa trên khoảng cách.
-    int target_speed = static_cast<int>(calculateSpeed(distance_cm));
 
     // Nếu AGV đang đứng yên và nhận lệnh di chuyển mới (hoặc có lệnh đang chờ)
     if ((!state_.is_moving && target_speed > 0) || state_.movement_pending)
@@ -1543,6 +1549,13 @@ void SystemManager::applyHeadingCorrection()
         direction = arc_direction_;
     }
 
+    // Nếu đang rẽ, kiểm tra xem đã đủ góc 90 độ chưa
+    if (target.is_turning) {
+        float angle_turned = fabs(calculateHeadingError(current_heading, target.turn_start_heading));
+        if (angle_turned >= 90.0f) {
+            plc_command_queue_.push("WRITE_D100_0"); // Gửi lệnh dừng
+        }
+    }
     if (direction != ArcDirection::NONE)
     {
         int outer_speed = base_speed;
@@ -1849,6 +1862,14 @@ void SystemManager::keyboard_control_thread()
                 state_.movement_pending = true; // Báo hiệu có lệnh di chuyển mới
             }
 
+            // Yêu cầu mới: Giữ lệnh nếu không an toàn
+            if (!is_safe)
+            {
+                LOG_WARNING << "[Keyboard Control] Path blocked. Command 'FORWARD' is pending.";
+                // Lệnh đã được lưu trong state_, luồng safety_monitor sẽ kích hoạt lại sau.
+                continue;
+            }
+
              {
                 std::lock_guard<std::mutex> lock(arc_direction_mutex_);
                 arc_direction_ = ArcDirection::NONE; // Tắt chế độ rẽ vòng cung khi tiến
@@ -1856,17 +1877,6 @@ void SystemManager::keyboard_control_thread()
 
             if (is_safe)
             {
-                // Lưu heading target
-                {
-                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
-                    current_movement_.is_active = true;
-                    current_movement_.target_heading = current_heading;
-                    current_movement_.heading_tolerance = 2.0f;
-                    current_movement_.is_forward = true;
-                    current_movement_.start_time = std::chrono::steady_clock::now();
-                    heading_pid_.reset();
-                }
-
                 {
                     std::lock_guard<std::mutex> lock(last_command_mutex_);
                     last_movement_command_ = "WRITE_D100_1";
@@ -1875,6 +1885,17 @@ void SystemManager::keyboard_control_thread()
                 plc_command_queue_.push("WRITE_D101_0");
                 plc_command_queue_.push("WRITE_D100_1");
 
+                // Lưu heading target
+                {
+                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                    current_movement_.is_active = true;
+                    current_movement_.target_heading = current_heading;
+                    current_movement_.heading_tolerance = 2.0f;
+                    current_movement_.is_forward = true;
+                    current_movement_.is_turning = false; // Không phải đang rẽ
+                    current_movement_.start_time = std::chrono::steady_clock::now();
+                    heading_pid_.reset();
+                }
                 LOG_INFO << "[Keyboard Control] Target heading locked: " << current_heading << "°";
             }
             else
@@ -1912,6 +1933,7 @@ void SystemManager::keyboard_control_thread()
                 current_movement_.is_active = true;
                 current_movement_.target_heading = current_heading;
                 current_movement_.heading_tolerance = 3.0f;
+                    current_movement_.is_turning = false; // Không phải đang rẽ
                 current_movement_.is_forward = false;
                 current_movement_.start_time = std::chrono::steady_clock::now();
                 heading_pid_.reset();
@@ -1934,11 +1956,12 @@ void SystemManager::keyboard_control_thread()
             LOG_INFO << "[khaipv] command arc left received";
             // Tắt heading correction
             {
-                std::lock_guard<std::mutex> lock(movement_target_mutex_);
-                current_movement_.is_active = false;
+                // Vẫn giữ active để tính tốc độ, nhưng is_turning sẽ được dùng để bỏ qua heading correction
+                // std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                // current_movement_.is_active = false;
             }
             bool is_safe;
-            float current_heading;
+            float start_heading;
             {
                 std::lock_guard<std::mutex> lock(state_.state_mutex);
                 is_safe = state_.is_safe_to_move;
@@ -1946,12 +1969,19 @@ void SystemManager::keyboard_control_thread()
                 state_.movement_command_active = true;
                 state_.is_moving = false;
                 state_.movement_pending = true; // Báo hiệu có lệnh di chuyển mới
+                start_heading = state_.current_heading;
             }
 
             // Đặt trạng thái rẽ vòng cung
             {
                 std::lock_guard<std::mutex> lock(arc_direction_mutex_);
-                arc_direction_ = ArcDirection::RIGHT;
+                arc_direction_ = ArcDirection::LEFT;
+            }
+            // Yêu cầu mới: Giữ lệnh nếu không an toàn
+            if (!is_safe)
+            {
+                LOG_WARNING << "[Keyboard Control] Path blocked. Command 'ARC LEFT' is pending.";
+                continue;
             }
 
             if (is_safe)
@@ -1962,12 +1992,21 @@ void SystemManager::keyboard_control_thread()
                     last_movement_command_ = "WRITE_D101_2";
                 }
 
+                // Lưu trạng thái bắt đầu rẽ
+                {
+                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                    current_movement_.is_active = true;
+                    current_movement_.is_turning = true;
+                    current_movement_.turn_start_heading = start_heading;
+                    current_movement_.is_forward = true;
+                }
+
                 // Gửi lệnh di chuyển tiến để AGV có thể bắt đầu rẽ
                 // Lệnh D101 chỉ có tác dụng khi D100=1
                 plc_command_queue_.push("WRITE_D100_1");
                 plc_command_queue_.push("WRITE_D101_2");
 
-                LOG_INFO << "[Keyboard Control] Target heading locked: " << current_heading << "°";
+                LOG_INFO << "[Keyboard Control] Arc Left started from heading: " << start_heading << "°";
             }
             else
             {
@@ -1985,12 +2024,12 @@ void SystemManager::keyboard_control_thread()
             LOG_INFO << "[khaipv] command arc right received";
             // Tắt heading correction
             {
-                std::lock_guard<std::mutex> lock(movement_target_mutex_);
-                current_movement_.is_active = false;
+                // std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                // current_movement_.is_active = false;
             }
             bool is_safe;
             // Đặt trạng thái rẽ vòng cung
-            float current_heading;
+            float start_heading;
             {
                 std::lock_guard<std::mutex> lock(state_.state_mutex);
                 is_safe = state_.is_safe_to_move;
@@ -1998,12 +2037,20 @@ void SystemManager::keyboard_control_thread()
                 state_.movement_command_active = true;
                 state_.is_moving = false;
                 state_.movement_pending = true; // Báo hiệu có lệnh di chuyển mới
+                start_heading = state_.current_heading;
             }
 
             // Đặt trạng thái rẽ vòng cung
             {
                 std::lock_guard<std::mutex> lock(arc_direction_mutex_);
                 arc_direction_ = ArcDirection::RIGHT;
+            }
+
+            // Yêu cầu mới: Giữ lệnh nếu không an toàn
+            if (!is_safe)
+            {
+                LOG_WARNING << "[Keyboard Control] Path blocked. Command 'ARC RIGHT' is pending.";
+                continue;
             }
 
             if (is_safe)
@@ -2013,17 +2060,21 @@ void SystemManager::keyboard_control_thread()
                     std::lock_guard<std::mutex> lock(last_command_mutex_);
                     last_movement_command_ = "WRITE_D101_1";
                 }
+                // Lưu trạng thái bắt đầu rẽ
+                {
+                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                    current_movement_.is_active = true;
+                    current_movement_.is_turning = true;
+                    current_movement_.turn_start_heading = start_heading;
+                    current_movement_.is_forward = true;
+                }
 
                 // Gửi lệnh di chuyển tiến để AGV có thể bắt đầu rẽ
                 // Lệnh D101 chỉ có tác dụng khi D100=1
                 plc_command_queue_.push("WRITE_D100_1");
                 plc_command_queue_.push("WRITE_D101_1");
 
-                LOG_INFO << "[Keyboard Control] Target heading locked: " << current_heading << "°";
-            }
-            else
-            {
-                LOG_WARNING << "[Keyboard Control] Không an toàn! Có vật cản phía trước.";
+                LOG_INFO << "[Keyboard Control] Arc Right started from heading: " << start_heading << "°";
             }
 
             last_command = command;
@@ -2039,6 +2090,7 @@ void SystemManager::keyboard_control_thread()
             {
                 std::lock_guard<std::mutex> lock(movement_target_mutex_);
                 current_movement_.is_active = false;
+                current_movement_.is_turning = false;
                 heading_pid_.reset();
             }
             
