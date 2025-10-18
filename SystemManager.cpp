@@ -745,9 +745,9 @@ void SystemManager::lidar_thread_func()
                                                      {
                                                          if (is_reversing)
                                                          {
-                                                             // Khi lùi: LUÔN cho phép di chuyển bất kể có vật cản hay không
-                                                             // Sử dụng tốc độ cố định hoặc tính toán dựa trên khoảng cách phía sau (nếu có sensor)
-                                                             smooth_speed = 300; // Tốc độ lùi mặc định (có thể điều chỉnh)
+                                                             // Khi lùi, sử dụng tốc độ lùi cố định làm tốc độ mục tiêu
+                                                             //smooth_speed = calculateSmoothSpeed(999.0f, true); // 999.0f để đạt tốc độ lùi tối đa
+                                                             smooth_speed = 200;
                                                              LOG_INFO << "[Lidar Thread] Reversing with speed: " << smooth_speed;
                                                          }
                                                          else if (is_safe)
@@ -1962,6 +1962,9 @@ void SystemManager::keyboard_control_thread()
                     last_movement_command_ = "WRITE_D101_2";
                 }
 
+                // Gửi lệnh di chuyển tiến để AGV có thể bắt đầu rẽ
+                // Lệnh D101 chỉ có tác dụng khi D100=1
+                plc_command_queue_.push("WRITE_D100_1");
                 plc_command_queue_.push("WRITE_D101_2");
 
                 LOG_INFO << "[Keyboard Control] Target heading locked: " << current_heading << "°";
@@ -2011,6 +2014,9 @@ void SystemManager::keyboard_control_thread()
                     last_movement_command_ = "WRITE_D101_1";
                 }
 
+                // Gửi lệnh di chuyển tiến để AGV có thể bắt đầu rẽ
+                // Lệnh D101 chỉ có tác dụng khi D100=1
+                plc_command_queue_.push("WRITE_D100_1");
                 plc_command_queue_.push("WRITE_D101_1");
 
                 LOG_INFO << "[Keyboard Control] Target heading locked: " << current_heading << "°";
