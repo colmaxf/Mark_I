@@ -1837,7 +1837,7 @@ void SystemManager::keyboard_control_thread()
             // TIẾN
             LOG_INFO << "[Keyboard Control]  FORWARD";
             LOG_INFO << "[khaipv] command forward received";
-            ;
+
             bool is_safe;
             float current_heading;
             {
@@ -1937,6 +1937,16 @@ void SystemManager::keyboard_control_thread()
                 std::lock_guard<std::mutex> lock(movement_target_mutex_);
                 current_movement_.is_active = false;
             }
+            bool is_safe;
+            float current_heading;
+            {
+                std::lock_guard<std::mutex> lock(state_.state_mutex);
+                is_safe = state_.is_safe_to_move;
+                current_heading = state_.current_heading;
+                state_.movement_command_active = true;
+                state_.is_moving = false;
+                state_.movement_pending = true; // Báo hiệu có lệnh di chuyển mới
+            }
 
             // Đặt trạng thái rẽ vòng cung
             {
@@ -1944,24 +1954,21 @@ void SystemManager::keyboard_control_thread()
                 arc_direction_ = ArcDirection::RIGHT;
             }
 
-            // Yêu cầu 1: Kiểm tra an toàn trước khi rẽ
-            bool is_safe;
+            if (is_safe)
             {
-                std::lock_guard<std::mutex> lock(state_.state_mutex);
-                is_safe = state_.is_safe_to_move;
-            }
+                
+                {
+                    std::lock_guard<std::mutex> lock(last_command_mutex_);
+                    last_movement_command_ = "WRITE_D101_2";
+                }
 
-            {
-                std::lock_guard<std::mutex> lock(state_.state_mutex);
-                state_.movement_command_active = true;
-                state_.is_moving = true;
-                state_.movement_pending = true;
-            }
+                plc_command_queue_.push("WRITE_D101_2");
 
-            if (!is_safe)
+                LOG_INFO << "[Keyboard Control] Target heading locked: " << current_heading << "°";
+            }
+            else
             {
-                LOG_WARNING << "[Keyboard Control] Command 'ARC LEFT' ignored: Obstacle detected!";
-                continue;
+                LOG_WARNING << "[Keyboard Control] Không an toàn! Có vật cản phía trước.";
             }
 
             last_command = command;
@@ -1978,31 +1985,39 @@ void SystemManager::keyboard_control_thread()
                 std::lock_guard<std::mutex> lock(movement_target_mutex_);
                 current_movement_.is_active = false;
             }
+            bool is_safe;
+            // Đặt trạng thái rẽ vòng cung
+            float current_heading;
+            {
+                std::lock_guard<std::mutex> lock(state_.state_mutex);
+                is_safe = state_.is_safe_to_move;
+                current_heading = state_.current_heading;
+                state_.movement_command_active = true;
+                state_.is_moving = false;
+                state_.movement_pending = true; // Báo hiệu có lệnh di chuyển mới
+            }
 
             // Đặt trạng thái rẽ vòng cung
             {
                 std::lock_guard<std::mutex> lock(arc_direction_mutex_);
-                arc_direction_ = ArcDirection::LEFT;
+                arc_direction_ = ArcDirection::RIGHT;
             }
 
-            // Yêu cầu 1: Kiểm tra an toàn trước khi rẽ
-            bool is_safe;
+            if (is_safe)
             {
-                std::lock_guard<std::mutex> lock(state_.state_mutex);
-                is_safe = state_.is_safe_to_move;
-            }
+                
+                {
+                    std::lock_guard<std::mutex> lock(last_command_mutex_);
+                    last_movement_command_ = "WRITE_D101_1";
+                }
 
-            {
-                std::lock_guard<std::mutex> lock(state_.state_mutex);
-                state_.movement_command_active = true;
-                state_.is_moving = true;
-                state_.movement_pending = true;
-            }
+                plc_command_queue_.push("WRITE_D101_1");
 
-            if (!is_safe)
+                LOG_INFO << "[Keyboard Control] Target heading locked: " << current_heading << "°";
+            }
+            else
             {
-                LOG_WARNING << "[Keyboard Control] Command 'ARC RIGHT' ignored: Obstacle detected!";
-                continue;
+                LOG_WARNING << "[Keyboard Control] Không an toàn! Có vật cản phía trước.";
             }
 
             last_command = command;
