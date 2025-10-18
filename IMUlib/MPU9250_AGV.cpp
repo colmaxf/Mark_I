@@ -13,7 +13,7 @@
 #include <cmath>
 #include <sys/time.h>
 #include <cstring>
-#include <iomanip>      // ← THÊM DÒNG NÀY (cho setprecision)
+#include <iomanip>      // < setprecision
 #include <sstream> 
 
 
@@ -43,7 +43,7 @@ float MadgwickFilter::invSqrt(float x) {
 MadgwickFilter::MadgwickFilter(float sampleFreq, float beta) {
     this->beta = beta;
     this->invSampleFreq = 1.0f / sampleFreq;
-    q0 = 1.0f;
+    q0 = 1.0f; // 
     q1 = 0.0f;
     q2 = 0.0f;
     q3 = 0.0f;
@@ -241,50 +241,45 @@ void MadgwickFilter::updateIMU(float gx, float gy, float gz,
 /**
  * @brief Lấy các góc Euler đã được tính toán.
  * 
- * CẤU HÌNH TRỤC THỰC TẾ:
- * - Y: Hướng lên trên (vuông góc mặt đất)
- * - Z: Hướng đằng TRƯỚC AGV
- * - X: Hướng sang TRÁI
+ * CẤU HÌNH TRỤC MỚI (Cần test):
+ * - Z: Hướng lên trên (vuông góc mặt đất)
+ * - X: Hướng đằng TRƯỚC AGV
+ * - Y: Hướng sang TRÁI/PHẢI
  * 
  * ĐỊNH NGHĨA GÓC:
- * - Roll (xoay quanh Z):  Nghiêng TRÁI/PHẢI
- *   Roll > 0: nghiêng sang TRÁI
- *   Roll < 0: nghiêng sang PHẢI
+ * - Roll (xoay quanh X):  Nghiêng TRÁI/PHẢI
+ *   Roll > 0: nghiêng sang PHẢI
+ *   Roll < 0: nghiêng sang TRÁI
  * 
- * - Pitch (xoay quanh X): Nghiêng TRƯỚC/SAU
- *   Pitch > 0: nghiêng về phía TRƯỚC
- *   Pitch < 0: nghiêng về phía SAU
+ * - Pitch (xoay quanh Y): Nghiêng TRƯỚC/SAU
+ *   Pitch > 0: nghiêng về phía SAU
+ *   Pitch < 0: nghiêng về phía TRƯỚC
  * 
- * - Yaw (xoay quanh Y):   Hướng di chuyển 0-360°
+ * - Yaw (xoay quanh Z):   Hướng di chuyển 0-360°
  * 
  * @param[out] roll Góc nghiêng trái/phải -180 to +180°
  * @param[out] pitch Góc nghiêng trước/sau -90 to +90°
  * @param[out] yaw Góc hướng (heading) 0-360°
  */
 void MadgwickFilter::getEulerAngles(float &roll, float &pitch, float &yaw) {
-    // Với cấu hình: Y lên, Z trước, X trái
+    // Với cấu hình mới: Z lên, X trước, Y trái/phải
     
-    // Roll: xoay quanh Z (trục trước) → nghiêng TRÁI/PHẢI
-    // Roll > 0: nghiêng TRÁI
-    // Roll < 0: nghiêng PHẢI
-    //
-    roll = atan2(2.0f * (q0 * q3 + q1 * q2), 
-                 1.0f - 2.0f * (q2 * q2 + q3 * q3)) * 57.29578f;
+    // Roll (xoay quanh trục X - trục trước) -> Nghiêng TRÁI/PHẢI
+    roll = atan2(2.0f * (q0 * q1 + q2 * q3), 
+                 1.0f - 2.0f * (q1 * q1 + q2 * q2)) * 57.29578f;
     
-    // Pitch: xoay quanh X (trục trái) → nghiêng TRƯỚC/SAU
-    // Pitch > 0: nghiêng TRƯỚC
-    // Pitch < 0: nghiêng SAU
-    float sinp = 2.0f * (q0 * q1 - q2 * q3);
+    // Pitch (xoay quanh trục Y - trục ngang) -> Nghiêng TRƯỚC/SAU
+    // Pitch > 0: nghiêng SAU
+    // Pitch < 0: nghiêng TRƯỚC
+    float sinp = 2.0f * (q0 * q2 - q3 * q1);
     if (fabs(sinp) >= 1.0f)
         pitch = copysign(90.0f, sinp); // Gimbal lock tại ±90°
     else
         pitch = asin(sinp) * 57.29578f;
     
-    // Yaw: xoay quanh Y (trục lên) → HƯỚNG DI CHUYỂN
-    // yaw = atan2(2.0f * (q0 * q2 + q1 * q3), 
-    //             1.0f - 2.0f * (q1 * q1 + q2 * q2)) * 57.29578f;
-    yaw = atan2(-2.0f * (q0 * q2 + q1 * q3),  //THÊM DẤU TRỪ
-            1.0f - 2.0f * (q1 * q1 + q2 * q2)) * 57.29578f;
+    // Yaw (xoay quanh trục Z - trục lên) -> HƯỚNG DI CHUYỂN
+    yaw = atan2(2.0f * (q0 * q3 + q1 * q2), 
+                1.0f - 2.0f * (q2 * q2 + q3 * q3)) * 57.29578f;
     
     // Chuẩn hóa yaw về [0, 360)
     if(yaw < 0) yaw += 360.0f;
@@ -297,8 +292,8 @@ void MadgwickFilter::getEulerAngles(float &roll, float &pitch, float &yaw) {
 float MadgwickFilter::getRawYaw() {
     // Phép tính tương tự getEulerAngles nhưng không chuẩn hóa về [0, 360)
     // và vẫn giữ dấu trừ nếu có.
-    float yaw = atan2(-2.0f * (q0 * q2 + q1 * q3),
-                      1.0f - 2.0f * (q1 * q1 + q2 * q2)) * 57.29578f;
+    float yaw = atan2(2.0f * (q0 * q3 + q1 * q2),
+                      1.0f - 2.0f * (q2 * q2 + q3 * q3)) * 57.29578f;
     return yaw;
 }
 

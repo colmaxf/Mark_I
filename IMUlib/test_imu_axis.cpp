@@ -4,9 +4,9 @@
  * @version 3.0 - YAW Test (Xoay trái/phải trên mặt phẳng)
  * 
  * CẤU HÌNH ĐÃ XÁC NHẬN:
- * - Y: Hướng lên trên (trục thẳng đứng) ✅
- * - Z: Hướng về phía trước AGV ✅
- * - X: Cần test (trái hay phải?)
+ * - z: Hướng lên trên (trục thẳng đứng) ✅
+ * - X: Hướng về phía trước AGV ✅
+ * - Y: Cần test (trái hay phải?)
  * 
  * PHƯƠNG PHÁP TEST:
  * - Đặt AGV trên mặt phẳng ngang
@@ -247,17 +247,20 @@ public:
     }
     
     void getEulerAngles(float &roll, float &pitch, float &yaw) {
-        roll = atan2(2.0f * (q0 * q3 + q1 * q2), 
-                     1.0f - 2.0f * (q2 * q2 + q3 * q3)) * 57.29578f;
+        // Roll (xoay quanh trục X - trục trước)
+        roll = atan2(2.0f * (q0 * q1 + q2 * q3), 
+                     1.0f - 2.0f * (q1 * q1 + q2 * q2)) * 57.29578f;
         
-        float sinp = 2.0f * (q0 * q1 - q2 * q3);
+        // Pitch (xoay quanh trục Y - trục ngang)
+        float sinp = 2.0f * (q0 * q2 - q3 * q1);
         if (fabs(sinp) >= 1.0f)
             pitch = copysign(90.0f, sinp);
         else
             pitch = asin(sinp) * 57.29578f;
         
-        yaw = atan2(2.0f * (q0 * q2 + q1 * q3), 
-                    1.0f - 2.0f * (q1 * q1 + q2 * q2)) * 57.29578f;
+        // Yaw (xoay quanh trục Z - trục lên)
+        yaw = atan2(2.0f * (q0 * q3 + q1 * q2), 
+                    1.0f - 2.0f * (q2 * q2 + q3 * q3)) * 57.29578f;
         
         if(yaw < 0) yaw += 360.0f;
     }

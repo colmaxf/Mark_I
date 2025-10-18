@@ -7,7 +7,7 @@
 #include <sstream>
 
 #if TEST_KEYBOARD_MODE == 1
-#include <linux/input.h>  // Cho input_event
+#include <linux/input.h> // Cho input_event
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
@@ -21,17 +21,18 @@
  * @param server_port Cổng của server trung tâm.
  * @param last_processed_cmd_type_ Khởi tạo loại lệnh cuối cùng đã xử lý là STOP để tránh việc bỏ qua lệnh STOP ban đầu.
  */
-SystemManager::SystemManager(const std::string& server_ip, int server_port) : 
-    comm_server_(std::make_unique<ServerComm::CommunicationServer>(server_ip, server_port)),
-    last_processed_cmd_type_(ServerComm::NavigationCommand::STOP), // Khởi tạo lệnh cuối cùng là STOP
-    arc_direction_(ArcDirection::NONE)
-{}
+SystemManager::SystemManager(const std::string &server_ip, int server_port) : comm_server_(std::make_unique<ServerComm::CommunicationServer>(server_ip, server_port)),
+                                                                              last_processed_cmd_type_(ServerComm::NavigationCommand::STOP), // Khởi tạo lệnh cuối cùng là STOP
+                                                                              arc_direction_(ArcDirection::NONE)
+{
+}
 
 /**
  * @brief Hàm hủy của lớp SystemManager.
  * @details Đảm bảo rằng hàm `stop()` được gọi để dừng tất cả các luồng và giải phóng tài nguyên một cách an toàn.
  */
-SystemManager::~SystemManager() {
+SystemManager::~SystemManager()
+{
     stop();
 }
 
@@ -41,11 +42,13 @@ SystemManager::~SystemManager() {
  * cho các tác vụ thời gian thực hoặc yêu cầu xử lý chuyên sâu.
  * @param core_id ID của lõi CPU để ghim luồng vào (ví dụ: 0, 1, 2, 3 trên Raspberry Pi 4).
  */
-void SystemManager::pin_thread_to_core(int core_id) {
+void SystemManager::pin_thread_to_core(int core_id)
+{
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(core_id % 4, &cpuset); // Pi 4 has 4 cores
-    if (sched_setaffinity(0, sizeof(cpuset), &cpuset) != 0) {
+    if (sched_setaffinity(0, sizeof(cpuset), &cpuset) != 0)
+    {
         LOG_WARNING << "[SystemManager] Failed to pin thread to core " << core_id << ": " << strerror(errno);
     }
 }
@@ -61,31 +64,35 @@ void SystemManager::pin_thread_to_core(int core_id) {
  * - Bắt đầu luồng giao tiếp của server.
  * @return `true` nếu tất cả các bước khởi tạo thành công, `false` nếu có lỗi xảy ra.
  */
-bool SystemManager::initialize() {
+bool SystemManager::initialize()
+{
     LOG_INFO << "[SystemManager] Initializing...";
 
     // Initialize PLC pointer
     plc_ptr_ = std::make_shared<MCProtocol>(PLC_IP, PLC_PORT);
 
-        // Thiết lập callback TRƯỚC KHI kết nối.
+    // Thiết lập callback TRƯỚC KHI kết nối.
     // Điều này đảm bảo trạng thái `state_.server_connected` luôn được cập nhật chính xác,
     // ngay cả khi kết nối lại tự động.
-    comm_server_->setConnectionCallback([this](bool connected) {
+    comm_server_->setConnectionCallback([this](bool connected)
+                                        {
         LOG_INFO << "[SystemManager] Server connection status changed to: " << (connected ? "Connected" : "Disconnected");
         std::lock_guard<std::mutex> lock(state_.state_mutex);
-        state_.server_connected = connected;
-    });
+        state_.server_connected = connected; });
     // Vòng lặp kết nối đến server, thử lại sau mỗi 3 giây nếu thất bại.
     // Điều này đảm bảo hệ thống có thể khởi động ngay cả khi server chưa sẵn sàng.
-    while (running_ && !comm_server_->connect()) {
+    while (running_ && !comm_server_->connect())
+    {
         LOG_WARNING << "[SystemManager] Server connection failed, retrying in 3 seconds...";
         std::this_thread::sleep_for(std::chrono::seconds(3));
     }
-    if (!running_) return false;
+    if (!running_)
+        return false;
 
     // Setup callbacks for the server communicator
     // Callback này được gọi bởi luồng của server để lấy dữ liệu trạng thái mới nhất của AGV.
-    comm_server_->setStatusCallback([this]() -> ServerComm::AGVStatusPacket {
+    comm_server_->setStatusCallback([this]() -> ServerComm::AGVStatusPacket
+                                    {
         ServerComm::AGVStatusPacket status;
         {
             // Khóa state_mutex để đọc dữ liệu từ state_ một cách an toàn.
@@ -208,17 +215,17 @@ bool SystemManager::initialize() {
         LOG_INFO << log_ss.str();
         // --- END LOG ---
 
-        return status;
-    });
+        return status; });
 
-    comm_server_->setConnectionCallback([this](bool connected) {
+    comm_server_->setConnectionCallback([this](bool connected)
+                                        {
         // Callback được gọi khi trạng thái kết nối server thay đổi.
         LOG_INFO << "[SystemManager] Server connection status: " << (connected ? "Connected" : "Disconnected");
         std::lock_guard<std::mutex> lock(state_.state_mutex);
-        state_.server_connected = connected;
-    });
+        state_.server_connected = connected; });
 
-    if (!comm_server_->start()) {
+    if (!comm_server_->start())
+    {
         LOG_ERROR << "[SystemManager] Failed to start server communication";
         return false;
     }
@@ -234,8 +241,10 @@ bool SystemManager::initialize() {
  * - Khởi chạy tất cả các luồng xử lý chính (PLC, LiDAR, an toàn, pin, v.v.).
  * - Duy trì một vòng lặp chính để in ra trạng thái hệ thống định kỳ cho đến khi nhận được tín hiệu dừng.
  */
-void SystemManager::run() {
-    if (!initialize()) {
+void SystemManager::run()
+{
+    if (!initialize())
+    {
         LOG_FATAL << "[SystemManager] Initialization failed. Shutting down.";
         return;
     }
@@ -252,13 +261,14 @@ void SystemManager::run() {
     // threads_.emplace_back(&SystemManager::heading_correction_thread, this); // Đã tích hợp vào lidar_thread
 #if TEST_KEYBOARD_MODE == 1
     threads_.emplace_back(&SystemManager::keyboard_control_thread, this);
-    
-    LOG_INFO << "[SystemManager] ⌨️  USB Keyboard control enabled (W/A/S/D/B)";  
-#endif 
+
+    LOG_INFO << "[SystemManager] ⌨️  USB Keyboard control enabled (W/A/S/D/B)";
+#endif
     // Luồng server_communication_thread được quản lý bên trong lớp CommunicationServer.
 
     // Vòng lặp chính chỉ để giám sát và báo cáo trạng thái.
-    while (running_) {
+    while (running_)
+    {
         std::this_thread::sleep_for(std::chrono::seconds(5));
         {
             std::lock_guard<std::mutex> lock(state_.state_mutex);
@@ -268,8 +278,8 @@ void SystemManager::run() {
                      << " | Server Connected: " << (state_.server_connected ? "Yes" : "No")
                      << " | Last LiDAR Data: " << state_.last_lidar_data
                      << " | Last IMU Data: " << state_.last_imu_data;
-            LOG_INFO << "Heading: " << std::fixed << std::setprecision(1) 
-                     << state_.current_heading << "° | Safe: " 
+            LOG_INFO << "Heading: " << std::fixed << std::setprecision(1)
+                     << state_.current_heading << "° | Safe: "
                      << (state_.is_safe_to_move ? "Yes" : "No")
                      << " | Moving: " << (state_.is_moving ? "Yes" : "No");
             LOG_INFO << "---------------------";
@@ -285,17 +295,22 @@ void SystemManager::run() {
  * - Chờ (join) tất cả các luồng con kết thúc thực thi.
  * - Xóa danh sách các luồng.
  */
-void SystemManager::stop() {
+void SystemManager::stop()
+{
     // Sử dụng exchange để đảm bảo hàm chỉ chạy một lần.
-    if (!running_.exchange(false)) {
+    if (!running_.exchange(false))
+    {
         return;
     }
     LOG_INFO << "[SystemManager] Initiating shutdown...";
-    if (comm_server_) {
+    if (comm_server_)
+    {
         comm_server_->stop(); // Gửi tín hiệu dừng đến luồng của server.
     }
-    for (auto& thread : threads_) {
-        if (thread.joinable()) {
+    for (auto &thread : threads_)
+    {
+        if (thread.joinable())
+        {
             thread.join();
             LOG_INFO << "[SystemManager] Thread joined";
         }
@@ -311,8 +326,10 @@ void SystemManager::stop() {
  * @details Gửi lệnh `WRITE_D110_1` để báo cho PLC biết rằng phần mềm đã sẵn sàng.
  * Sử dụng cờ `system_initialized_` để đảm bảo lệnh này chỉ được gửi một lần.
  */
-void SystemManager::initializeSystem() {
-    if (system_initialized_.exchange(true)) {
+void SystemManager::initializeSystem()
+{
+    if (system_initialized_.exchange(true))
+    {
         LOG_INFO << "[System Init] Already initialized, skipping D110_1";
         return;
     }
@@ -321,9 +338,12 @@ void SystemManager::initializeSystem() {
     plc_command_queue_.push("WRITE_D110_1");
     // Chờ phản hồi từ PLC (pop có thể bị block).
     std::string result;
-    if (plc_result_queue_.pop(result)) {
+    if (plc_result_queue_.pop(result))
+    {
         LOG_INFO << "[System Init] D110_1 response: " << result;
-    } else {
+    }
+    else
+    {
         LOG_ERROR << "[System Init] No response for D110_1";
     }
 }
@@ -335,15 +355,23 @@ void SystemManager::initializeSystem() {
  * @param distance Khoảng cách đến vật cản (cm).
  * @return Tốc độ mục tiêu (giá trị số nguyên để gửi cho PLC).
  */
-double SystemManager::calculateSpeed(double distance) {
+double SystemManager::calculateSpeed(double distance)
+{
     distance = std::max(50.0, std::min(400.0, distance));
-    if (distance >= 50.0 && distance < 100.0) {
+    if (distance >= 50.0 && distance < 100.0)
+    {
         return 100.0 + ((distance - 50.0) * (500.0 - 100.0)) / (100.0 - 50.0);
-    } else if (distance >= 100.0 && distance < 200.0) {
+    }
+    else if (distance >= 100.0 && distance < 200.0)
+    {
         return 500.0 + ((distance - 100.0) * (1500.0 - 500.0)) / (200.0 - 100.0);
-    } else if (distance >= 200.0 && distance < 300.0) {
+    }
+    else if (distance >= 200.0 && distance < 300.0)
+    {
         return 1500.0 + ((distance - 200.0) * (2500.0 - 1500.0)) / (300.0 - 200.0);
-    } else { // distance >= 300.0
+    }
+    else
+    { // distance >= 300.0
         return 2500.0 + ((distance - 300.0) * (3000.0 - 2500.0)) / (400.0 - 300.0);
     }
 }
@@ -356,9 +384,11 @@ double SystemManager::calculateSpeed(double distance) {
  * @param movement_active Cờ cho biết có lệnh di chuyển (tiến/lùi) đang hoạt động hay không.
  * @return Tốc độ đã được làm mượt để gửi đến PLC.
  */
-int SystemManager::calculateSmoothSpeed(float distance_cm, bool movement_active) {
+int SystemManager::calculateSmoothSpeed(float distance_cm, bool movement_active)
+{
     // Nếu không có lệnh di chuyển và không có lệnh đang chờ, dừng AGV.
-    if (!movement_active && !state_.movement_pending) {
+    if (!movement_active && !state_.movement_pending)
+    {
         state_.is_moving = false;
         state_.current_speed = 0;
         return 0;
@@ -368,12 +398,14 @@ int SystemManager::calculateSmoothSpeed(float distance_cm, bool movement_active)
     int target_speed = static_cast<int>(calculateSpeed(distance_cm));
 
     // Nếu AGV đang đứng yên và nhận lệnh di chuyển mới (hoặc có lệnh đang chờ)
-    if ((!state_.is_moving && target_speed > 0) || state_.movement_pending) {
+    if ((!state_.is_moving && target_speed > 0) || state_.movement_pending)
+    {
         LOG_INFO << "[Speed Control] Starting movement towards target speed: " << target_speed;
         state_.is_moving = true;
-        
+
         // Nếu có lệnh đang chờ, xử lý nó và reset cờ
-        if (state_.movement_pending) {
+        if (state_.movement_pending)
+        {
             LOG_INFO << "[Speed Control] Acknowledged pending movement command.";
             state_.movement_pending = false;
         }
@@ -383,23 +415,29 @@ int SystemManager::calculateSmoothSpeed(float distance_cm, bool movement_active)
     }
 
     // Nếu AGV đang trong quá trình di chuyển.
-    if (state_.is_moving) {
+    if (state_.is_moving)
+    {
         // Tính thời gian đã trôi qua kể từ khi bắt đầu di chuyển.
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - state_.movement_start_time).count();
+                           std::chrono::steady_clock::now() - state_.movement_start_time)
+                           .count();
 
         // Giai đoạn tăng tốc: tăng tốc tuyến tính trong khoảng thời gian ACCEL_TIME_MS.
-        if (elapsed < ACCEL_TIME_MS) {
+        if (elapsed < ACCEL_TIME_MS)
+        {
             float t = static_cast<float>(elapsed) / ACCEL_TIME_MS;
             state_.current_speed = MIN_START_SPEED + static_cast<int>((target_speed - MIN_START_SPEED) * t);
-        } else {
+        }
+        else
+        {
             // Sau giai đoạn tăng tốc, giữ tốc độ bằng tốc độ mục tiêu.
             state_.current_speed = target_speed;
         }
     }
 
     // Nếu tốc độ mục tiêu giảm xuống dưới mức tối thiểu (và không có lệnh đang chờ), dừng AGV.
-    if (target_speed < MIN_START_SPEED && !state_.movement_pending) {
+    if (target_speed < MIN_START_SPEED && !state_.movement_pending)
+    {
         state_.is_moving = false;
         state_.current_speed = 0;
     }
@@ -414,37 +452,48 @@ int SystemManager::calculateSmoothSpeed(float distance_cm, bool movement_active)
  * @param plc Tham chiếu đến đối tượng MCProtocol đã kết nối.
  * @return Chuỗi kết quả của hành động (ví dụ: "Write OK", "D200 = 123").
  */
-std::string SystemManager::parseAndExecutePlcCommand(const std::string& command, MCProtocol& plc) {
+std::string SystemManager::parseAndExecutePlcCommand(const std::string &command, MCProtocol &plc)
+{
     std::stringstream ss(command);
     std::string command_part, device_part, value_part;
     std::getline(ss, command_part, '_');
     std::getline(ss, device_part, '_');
     std::getline(ss, value_part);
 
-    if (command_part.empty() || device_part.empty()) return "Invalid command format";
+    if (command_part.empty() || device_part.empty())
+        return "Invalid command format";
 
     // Tách loại thiết bị (D, M, Y,...) và địa chỉ.
     std::string device_type = device_part.substr(0, 1);
     uint32_t address;
-    try {
+    try
+    {
         address = std::stoul(device_part.substr(1));
-    } catch (...) {
+    }
+    catch (...)
+    {
         return "Invalid address";
     }
 
     // Xử lý lệnh READ.
-    if (command_part == "READ") {
-        if (device_type == "D" || device_type == "C") {
+    if (command_part == "READ")
+    {
+        if (device_type == "D" || device_type == "C")
+        {
             return device_part + " = " + std::to_string(plc.readSingleWord(device_type, address));
         }
         return "Unsupported READ device";
     } // Xử lý lệnh WRITE.
-    else if (command_part == "WRITE") {
-        try {
+    else if (command_part == "WRITE")
+    {
+        try
+        {
             uint16_t value = std::stoul(value_part);
             bool success = plc.writeSingleWord(device_type, address, value);
             return success ? "Write OK" : "Write FAILED";
-        } catch (...) {
+        }
+        catch (...)
+        {
             return "Invalid value for WRITE";
         }
     }
@@ -463,20 +512,25 @@ std::string SystemManager::parseAndExecutePlcCommand(const std::string& command,
  * - Vòng lặp chính: Lấy lệnh từ `plc_command_queue_`, thực thi chúng, và đẩy kết quả vào `plc_result_queue_`.
  * - Dọn dẹp và ngắt kết nối khi luồng dừng.
  */
-void SystemManager::plc_thread_func() {
+void SystemManager::plc_thread_func()
+{
     pin_thread_to_core(0);
     LOG_REGISTER_CONTEXT("PLC", "PLC Communication Thread");
     LOG_SET_CONTEXT("PLC");
     LOG_INFO << "[PLC Thread] Starting...";
 
     // Vòng lặp quản lý trạng thái chính: Luôn chạy để đảm bảo PLC được kết nối.
-    while (running_) {
+    while (running_)
+    {
         // ----- TRẠNG THÁI: ĐÃ KẾT NỐI -> XỬ LÝ LỆNH VÀ GIÁM SÁT -----
-        if (plc_ptr_->isConnected()) {
+        if (plc_ptr_->isConnected())
+        {
             std::string command;
             // Lấy lệnh từ queue (không block)
-            if (plc_command_queue_.pop(command)) {
-                try {
+            if (plc_command_queue_.pop(command))
+            {
+                try
+                {
                     // Thực thi lệnh. Nếu mất kết nối, hàm này sẽ throw exception.
                     LOG_INFO << "[PLC Thread] Executing command: " << command;
                     std::string response = parseAndExecutePlcCommand(command, *plc_ptr_);
@@ -485,9 +539,11 @@ void SystemManager::plc_thread_func() {
                         std::lock_guard<std::mutex> lock(state_.state_mutex);
                         state_.last_plc_status = response;
                     }
-                } catch (const std::exception& e) {
+                }
+                catch (const std::exception &e)
+                {
                     LOG_ERROR << "[PLC Thread] Connection lost while executing command '" << command << "': " << e.what();
-                    
+
                     // --- HÀNH ĐỘNG KHI MẤT KẾT NỐI ---
                     plc_ptr_->stopAllMonitors(); // Dừng tất cả các monitor cũ để tránh thread leak
                     plc_ptr_->disconnect();      // Đóng socket cũ
@@ -500,15 +556,18 @@ void SystemManager::plc_thread_func() {
             }
             // Ngủ một chút để tránh chiếm dụng CPU khi không có lệnh
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        } 
+        }
         // ----- TRẠNG THÁI: MẤT KẾT NỐI -> THỬ KẾT NỐI LẠI -----
-        else {
+        else
+        {
             LOG_INFO << "[PLC Thread] PLC disconnected. Attempting to reconnect...";
             bool connection_established = false;
-            
+
             // Thử kết nối lại 3 lần
-            for (int attempt = 1; attempt <= 3 && running_; ++attempt) {
-                if (plc_ptr_->connect()) {
+            for (int attempt = 1; attempt <= 3 && running_; ++attempt)
+            {
+                if (plc_ptr_->connect())
+                {
                     connection_established = true;
                     LOG_INFO << "[PLC Thread] PLC reconnected successfully.";
                     break;
@@ -518,7 +577,8 @@ void SystemManager::plc_thread_func() {
             }
 
             // Xử lý sau khi thử kết nối lại
-            if (connection_established) {
+            if (connection_established)
+            {
                 // --- KHI KẾT NỐI LẠI THÀNH CÔNG ---
                 {
                     std::lock_guard<std::mutex> lock(state_.state_mutex);
@@ -526,8 +586,8 @@ void SystemManager::plc_thread_func() {
                 }
                 // Khởi tạo lại hệ thống và các monitor cho kết nối mới
                 initializeSystem();
-                plc_ptr_->monitorRegister("D", 102,
-                    [this](const std::string&, uint32_t, uint16_t, uint16_t new_val) {
+                plc_ptr_->monitorRegister("D", 102, [this](const std::string &, uint32_t, uint16_t, uint16_t new_val)
+                                          {
                         if (new_val == 5) {
                             LOG_WARNING << "[PLC Monitor] D102 is 5 (Error State). Acknowledging.";
                             plc_in_error_state_ = true;
@@ -536,9 +596,10 @@ void SystemManager::plc_thread_func() {
                             LOG_INFO << "[PLC Monitor] D102 is 0 after error. Resetting.";
                             plc_in_error_state_ = false;
                             plc_command_queue_.push("WRITE_D110_1");
-                        }
-                    }, 250);
-            } else {
+                        } }, 250);
+            }
+            else
+            {
                 // Nếu sau 3 lần vẫn thất bại, đợi một lúc rồi thử lại từ đầu
                 LOG_ERROR << "[PLC Thread] Could not reconnect after 3 attempts. Waiting for 5 seconds.";
                 std::this_thread::sleep_for(std::chrono::seconds(5));
@@ -567,13 +628,15 @@ void SystemManager::plc_thread_func() {
  *   - Đẩy các điểm này vào `stable_points_queue_` để luồng server gửi đi.
  * - Dừng `LidarProcessor` khi luồng kết thúc.
  */
-void SystemManager::lidar_thread_func() {
+void SystemManager::lidar_thread_func()
+{
     pin_thread_to_core(1);
     LOG_INFO << "[LiDAR Thread] Starting...";
 
     // Vòng lặp chính để quản lý kết nối và xử lý dữ liệu LiDAR.
     // Nếu kết nối bị mất, thử khởi động lại.
-    while (running_) {
+    while (running_)
+    {
         auto lidar_processor = std::make_unique<LidarProcessor>();
         // Thử khởi tạo với retry
         int init_attempts = 0;
@@ -582,8 +645,10 @@ void SystemManager::lidar_thread_func() {
         // Vòng lặp khởi tạo với tối đa 3 lần thử.
         // Nếu thất bại, đợi 10 giây rồi thử lại từ đầu.
         // Cập nhật trạng thái kết nối LiDAR trong state_.
-        while (init_attempts < 3 && running_) {
-            if (lidar_processor->initialize() && lidar_processor->start()) {
+        while (init_attempts < 3 && running_)
+        {
+            if (lidar_processor->initialize() && lidar_processor->start())
+            {
                 initialized = true;
                 break;
             }
@@ -595,7 +660,8 @@ void SystemManager::lidar_thread_func() {
         }
 
         // Nếu sau 3 lần thử vẫn không thành công, đợi 10 giây rồi thử lại từ đầu.
-        if (!initialized) {
+        if (!initialized)
+        {
             LOG_ERROR << "[LiDAR Thread] Failed to initialize after 3 attempts";
             std::lock_guard<std::mutex> lock(state_.state_mutex);
             state_.lidar_connected = false;
@@ -611,204 +677,235 @@ void SystemManager::lidar_thread_func() {
         }
 
         // Callback xử lý dữ liệu thời gian thực để phát hiện vật cản và điều khiển tốc độ.
-        lidar_processor->setRealtimeCallback([this](const std::vector<LidarPoint>& points) {
-            LOG_INFO << "[LIDAR Thread] Processed frame. Points: " << points.size();
-            {
-                // Đóng gói dữ liệu điểm để gửi đi
-                std::vector<ServerComm::Point2D> points_to_send;
-                points_to_send.reserve(points.size());
-                for (const auto& p : points) {
-                    points_to_send.push_back({p.x, p.y});
-                }
-                // Đẩy vào hàng đợi thời gian thực
-                realtime_points_queue_.push(std::move(points_to_send));
-            }
-            float min_front = 999.0f;
-            // Tìm khoảng cách nhỏ nhất trong vùng 90 độ phía trước.
-            for (const auto& p : points) {
-                // Góc được tính bằng radian, 2.356 rad ≈ 135°, 3.927 rad ≈ 225°.
-                if (p.angle > 2.356 && p.angle < 3.927) {
-                    min_front = std::min(min_front, p.distance);
-                }
-            }
+        lidar_processor->setRealtimeCallback([this](const std::vector<LidarPoint> &points)
+                                             {
+                                                 LOG_INFO << "[LIDAR Thread] Processed frame. Points: " << points.size();
+                                                 {
+                                                     // Đóng gói dữ liệu điểm để gửi đi
+                                                     std::vector<ServerComm::Point2D> points_to_send;
+                                                     points_to_send.reserve(points.size());
+                                                     for (const auto &p : points)
+                                                     {
+                                                         points_to_send.push_back({p.x, p.y});
+                                                     }
+                                                     // Đẩy vào hàng đợi thời gian thực
+                                                     realtime_points_queue_.push(std::move(points_to_send));
+                                                 }
+                                                 float min_front = 999.0f;
+                                                 // Tìm khoảng cách nhỏ nhất trong vùng 90 độ phía trước.
+                                                 for (const auto &p : points)
+                                                 {
+                                                     // Góc được tính bằng radian, 2.356 rad ≈ 135°, 3.927 rad ≈ 225°.
+                                                     if (p.angle > 2.356 && p.angle < 3.927)
+                                                     {
+                                                         min_front = std::min(min_front, p.distance);
+                                                     }
+                                                 }
 
-            // Nếu không có điểm nào ở phía trước, bỏ qua.
-            if (min_front >= 999.0f) return;
-float min_dist_cm = min_front * 100.0f; // Chuyển từ mét sang cm
-int smooth_speed = 0;
-bool movement_active = false;
-bool is_safe = false;
-bool is_reversing = false;
+                                                 // Nếu không có điểm nào ở phía trước, bỏ qua.
+                                                 if (min_front >= 999.0f)
+                                                     return;
+                                                 float min_dist_cm = min_front * 100.0f; // Chuyển từ mét sang cm
+                                                 int smooth_speed = 0;
+                                                 bool movement_active = false;
+                                                 bool is_safe = false;
+                                                 bool is_reversing = false;
 
-// Khóa mutex để cập nhật và đọc state_ một cách an toàn
-{
-    std::lock_guard<std::mutex> lock(state_.state_mutex);
-    state_.current_front_distance = min_dist_cm;
-    state_.is_safe_to_move = min_dist_cm > EMERGENCY_STOP_DISTANCE_CM;
-    state_.last_safety_update = std::chrono::steady_clock::now().time_since_epoch().count();
-    movement_active = state_.movement_command_active;
-    is_safe = state_.is_safe_to_move;
-    
-    // Kiểm tra xem có đang lùi không
-    {
-        std::lock_guard<std::mutex> lock_movement(movement_target_mutex_);
-        is_reversing = current_movement_.is_active && !current_movement_.is_forward;
-    }
-    
-    LOG_INFO << "[Lidar Thread] is_reversing: " << (is_reversing ? "Yes" : "No")
-             << ", is_safe: " << (is_safe ? "Yes" : "No")
-             << ", movement_active: " << (movement_active ? "Yes" : "No");
-    
-    // Cập nhật chuỗi trạng thái LiDAR
-    std::stringstream ss;
-    ss << "Points: " << points.size()
-       << ", FrontDist: " << std::fixed << std::setprecision(1)
-       << min_dist_cm << "cm, Safe: " << (state_.is_safe_to_move ? "Yes" : "No");
-    state_.last_lidar_data = ss.str();
-    LOG_INFO << "[LIDAR Thread][REALTIMECALLBACK] state_.last_lidar_data: " << state_.last_lidar_data;
-    
-    // QUAN TRỌNG: Logic tính toán tốc độ mượt mà
-    if (movement_active) {
-        if (is_reversing) {
-            // Khi lùi: LUÔN cho phép di chuyển bất kể có vật cản hay không
-            // Sử dụng tốc độ cố định hoặc tính toán dựa trên khoảng cách phía sau (nếu có sensor)
-            smooth_speed = 800;  // Tốc độ lùi mặc định (có thể điều chỉnh)
-            LOG_INFO << "[Lidar Thread] Reversing with speed: " << smooth_speed;
-        } else if (is_safe) {
-            // Khi tiến: Chỉ di chuyển nếu an toàn
-            smooth_speed = calculateSmoothSpeed(min_dist_cm, true);
-            LOG_INFO << "[Lidar Thread] Moving forward with speed: " << smooth_speed;
-        } else {
-            // Khi tiến nhưng không an toàn: Dừng
-            smooth_speed = 0;
-            LOG_WARNING << "[Lidar Thread] Forward blocked! Speed set to 0";
-        }
-    } else {
-        // Không có lệnh di chuyển
-        smooth_speed = calculateSmoothSpeed(min_dist_cm, false);
-    }
-    
-    // Lưu smooth_speed vào state để heading correction dùng
-    state_.current_speed = smooth_speed;
-}
+                                                 // Khóa mutex để cập nhật và đọc state_ một cách an toàn
+                                                 {
+                                                     std::lock_guard<std::mutex> lock(state_.state_mutex);
+                                                     state_.current_front_distance = min_dist_cm;
+                                                     state_.is_safe_to_move = min_dist_cm > EMERGENCY_STOP_DISTANCE_CM;
+                                                     state_.last_safety_update = std::chrono::steady_clock::now().time_since_epoch().count();
+                                                     movement_active = state_.movement_command_active;
+                                                     is_safe = state_.is_safe_to_move;
 
-            // Chỉ gửi lệnh tốc độ đến PLC nếu giá trị tốc độ thay đổi để giảm tải.
-            static int last_sent_safety = -1;
-            int safety_signal = is_safe ? 1 : 0;
-            
-            if (safety_signal != last_sent_safety) {
-                plc_command_queue_.push("WRITE_D103_" + std::to_string(safety_signal));
-                last_sent_safety = safety_signal;
-                LOG_INFO << "[LIDAR Thread] Safety signal D103 = " << safety_signal;
-            }
+                                                     // Kiểm tra xem có đang lùi không
+                                                     {
+                                                         std::lock_guard<std::mutex> lock_movement(movement_target_mutex_);
+                                                         is_reversing = current_movement_.is_active && !current_movement_.is_forward;
+                                                     }
 
-            // =================================================================
-// LOGIC HEADING CORRECTION ĐƯỢC TÍCH HỢP VÀO ĐÂY
-// =================================================================
-MovementTarget target;
-float current_heading;
+                                                     LOG_INFO << "[Lidar Thread] is_reversing: " << (is_reversing ? "Yes" : "No")
+                                                              << ", is_safe: " << (is_safe ? "Yes" : "No")
+                                                              << ", movement_active: " << (movement_active ? "Yes" : "No");
 
-// Lấy thông tin movement target
-{
-    std::lock_guard<std::mutex> lock(movement_target_mutex_);
-    target = current_movement_;
-    is_reversing = target.is_active && !target.is_forward;  // Kiểm tra đang lùi
-}
+                                                     // Cập nhật chuỗi trạng thái LiDAR
+                                                     std::stringstream ss;
+                                                     ss << "Points: " << points.size()
+                                                        << ", FrontDist: " << std::fixed << std::setprecision(1)
+                                                        << min_dist_cm << "cm, Safe: " << (state_.is_safe_to_move ? "Yes" : "No");
+                                                     state_.last_lidar_data = ss.str();
+                                                     LOG_INFO << "[LIDAR Thread][REALTIMECALLBACK] state_.last_lidar_data: " << state_.last_lidar_data;
 
-// Lấy heading và base_speed
-int base_speed = smooth_speed;  // Sử dụng smooth_speed vừa tính toán
+                                                     // QUAN TRỌNG: Logic tính toán tốc độ mượt mà
+                                                     if (movement_active)
+                                                     {
+                                                         if (is_reversing)
+                                                         {
+                                                             // Khi lùi: LUÔN cho phép di chuyển bất kể có vật cản hay không
+                                                             // Sử dụng tốc độ cố định hoặc tính toán dựa trên khoảng cách phía sau (nếu có sensor)
+                                                             smooth_speed = 800; // Tốc độ lùi mặc định (có thể điều chỉnh)
+                                                             LOG_INFO << "[Lidar Thread] Reversing with speed: " << smooth_speed;
+                                                         }
+                                                         else if (is_safe)
+                                                         {
+                                                             // Khi tiến: Chỉ di chuyển nếu an toàn
+                                                             smooth_speed = calculateSmoothSpeed(min_dist_cm, true);
+                                                             LOG_INFO << "[Lidar Thread] Moving forward with speed: " << smooth_speed;
+                                                         }
+                                                         else
+                                                         {
+                                                             // Khi tiến nhưng không an toàn: Dừng
+                                                             smooth_speed = 0;
+                                                             LOG_WARNING << "[Lidar Thread] Forward blocked! Speed set to 0";
+                                                         }
+                                                     }
+                                                     else
+                                                     {
+                                                         // Không có lệnh di chuyển
+                                                         smooth_speed = calculateSmoothSpeed(min_dist_cm, false);
+                                                     }
 
-{
-    std::lock_guard<std::mutex> lock(state_.state_mutex);
-    current_heading = state_.current_heading;
-}
+                                                     // Lưu smooth_speed vào state để heading correction dùng
+                                                     state_.current_speed = smooth_speed;
+                                                 }
 
-// Nếu không có lệnh di chuyển, không làm gì thêm
-if (!target.is_active) {
-    return;
-}
+                                                 // Chỉ gửi lệnh tốc độ đến PLC nếu giá trị tốc độ thay đổi để giảm tải.
+                                                 static int last_sent_safety = -1;
+                                                 int safety_signal = is_safe ? 1 : 0; // D103 = 1 (an toàn), 0 (không an toàn)
 
-// QUAN TRỌNG: Sửa điều kiện dừng bánh xe
-// Chỉ dừng khi:
-// 1. Tốc độ = 0, HOẶC
-// 2. Đang tiến VÀ không an toàn (không áp dụng cho lùi)
-if (base_speed == 0 || (target.is_forward && !is_safe)) {
-    // Nếu đang lùi và base_speed = 0, vẫn cho phép lùi với tốc độ cố định
-    if (is_reversing && base_speed == 0) {
-        // Đặt tốc độ lùi cố định khi có vật cản
-        base_speed = 500;  // Tốc độ lùi chậm an toàn
-        LOG_INFO << "[LIDAR/Heading] Reversing with fixed speed due to obstacle: " << base_speed;
-    } else {
-        // Dừng bánh xe cho các trường hợp khác
-        plc_command_queue_.push("WRITE_D104_0");
-        plc_command_queue_.push("WRITE_D105_0");
-        LOG_INFO << "[LIDAR/Heading] Wheels stopped. Reason: base_speed=" << base_speed
-                 << ", is_forward=" << target.is_forward << ", is_safe=" << is_safe;
-        return;
-    }
-}
+                                                 if (safety_signal != last_sent_safety)
+                                                 {
+                                                     plc_command_queue_.push("WRITE_D103_" + std::to_string(safety_signal));
+                                                     last_sent_safety = safety_signal;
+                                                     LOG_INFO << "[LIDAR Thread] Safety signal D103 = " << safety_signal;
+                                                 }
 
-// Tính sai số góc
-float heading_error = calculateHeadingError(current_heading, target.target_heading);
+                                                 // =================================================================
+                                                 // LOGIC HEADING CORRECTION ĐƯỢC TÍCH HỢP VÀO ĐÂY
+                                                 // =================================================================
+                                                 MovementTarget target; // Mục tiêu di chuyển hiện tại
+                                                 float current_heading; // Heading hiện tại
 
-// Nếu lệch hướng, tính toán lại tốc độ 2 bánh
-if (fabs(heading_error) > target.heading_tolerance) {
-    LOG_WARNING << "[LIDAR/Heading] Deviation! Err: " << heading_error << "°. Correcting...";
-    int left_speed, right_speed;
-    
-    // Khi lùi và có lệch hướng, điều chỉnh nhẹ nhàng hơn
-    if (is_reversing) {
-        // Giảm độ nhạy khi lùi bằng cách chia correction cho 2
-        float reduced_error = heading_error * 0.5f;
-        calculateDifferentialSpeed(reduced_error, base_speed, left_speed, right_speed);
-    } else {
-        calculateDifferentialSpeed(heading_error, base_speed, left_speed, right_speed);
-    }
-    
-    plc_command_queue_.push("WRITE_D104_" + std::to_string(left_speed));
-    plc_command_queue_.push("WRITE_D105_" + std::to_string(right_speed));
-} else {
-    // Nếu đi đúng hướng, 2 bánh cùng tốc độ
-    plc_command_queue_.push("WRITE_D104_" + std::to_string(base_speed));
-    plc_command_queue_.push("WRITE_D105_" + std::to_string(base_speed));
-}
+                                                 // Lấy thông tin movement target
+                                                 {
+                                                     std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                                                     target = current_movement_;                            // Sao chép mục tiêu hiện tại
+                                                     is_reversing = target.is_active && !target.is_forward; // Kiểm tra đang lùi
+                                                 }
 
-// Log thông tin debug
-if (is_reversing) {
-    LOG_INFO << "[LIDAR/Heading] Reversing - Speed: " << base_speed 
-             << ", Heading: " << current_heading << "°"
-             << ", Target: " << target.target_heading << "°"
-             << ", Error: " << heading_error << "°";
-}
+                                                 // Lấy heading và base_speed
+                                                 int base_speed = smooth_speed; // Sử dụng smooth_speed vừa tính toán
 
-// =================================================================
-// LOGIC RẼ VÒNG CUNG (ARC TURN)
-// =================================================================
-ArcDirection direction;
-{
-    std::lock_guard<std::mutex> lock(arc_direction_mutex_);
-    direction = arc_direction_;
-}
+                                                 {
+                                                     std::lock_guard<std::mutex> lock(state_.state_mutex);
+                                                     current_heading = state_.current_heading;
+                                                 }
 
-if (direction != ArcDirection::NONE) {
-    int outer_speed = base_speed;
-    int inner_speed = base_speed / 2; // Bánh trong chạy bằng nửa tốc độ
+                                                 // Nếu không có lệnh di chuyển, không làm gì thêm
+                                                 if (!target.is_active)
+                                                 {
+                                                     return;
+                                                 }
 
-    if (direction == ArcDirection::LEFT) {
-        LOG_INFO << "[LIDAR/ARC] Arc Left - BaseSpeed: " << base_speed << " -> L:" << outer_speed << ", R:" << inner_speed;
-        plc_command_queue_.push("WRITE_D104_" + std::to_string(outer_speed)); // Bánh trái (ngoài)
-        plc_command_queue_.push("WRITE_D105_" + std::to_string(inner_speed)); // Bánh phải (trong)
-    } else { // ArcDirection::RIGHT
-        LOG_INFO << "[LIDAR/ARC] Arc Right - BaseSpeed: " << base_speed << " -> L:" << inner_speed << ", R:" << outer_speed;
-        plc_command_queue_.push("WRITE_D104_" + std::to_string(inner_speed)); // Bánh trái (trong)
-        plc_command_queue_.push("WRITE_D105_" + std::to_string(outer_speed)); // Bánh phải (ngoài)
-    }
-}
+                                                 // QUAN TRỌNG: Sửa điều kiện dừng bánh xe
+                                                 // Chỉ dừng khi:
+                                                 // 1. Tốc độ = 0, HOẶC
+                                                 // 2. Đang tiến VÀ không an toàn (không áp dụng cho lùi)
+                                                 if (base_speed == 0 || (target.is_forward && !is_safe))
+                                                 {
+                                                     // Nếu đang lùi và base_speed = 0, vẫn cho phép lùi với tốc độ cố định
+                                                     if (is_reversing && base_speed == 0)
+                                                     {
+                                                         // Đặt tốc độ lùi cố định khi có vật cản
+                                                         base_speed = 200; // Tốc độ lùi chậm an toàn
+                                                         LOG_INFO << "[LIDAR/Heading][khaipv] Reversing with fixed speed due to obstacle: " << base_speed;
+                                                     }
+                                                     else
+                                                     {
+                                                         LOG_INFO << "[khaipv] Stopping heading correction as base_speed=0 or unsafe to move forward.";
+                                                         // Dừng bánh xe cho các trường hợp khác
+                                                         plc_command_queue_.push("WRITE_D104_0");
+                                                         plc_command_queue_.push("WRITE_D105_0");
+                                                         LOG_INFO << "[LIDAR/Heading] Wheels stopped. Reason: base_speed=" << base_speed
+                                                                  << ", is_forward=" << target.is_forward << ", is_safe=" << is_safe;
+                                                         return;
+                                                     }
+                                                 }
 
-// =================================================================
-// KẾT THÚC LOGIC HEADING CORRECTION
-// =================================================================
-        });
+                                                 // Tính sai số góc
+                                                 float heading_error = calculateHeadingError(current_heading, target.target_heading);
+
+                                                 // Nếu lệch hướng, tính toán lại tốc độ 2 bánh
+                                                 if (fabs(heading_error) > target.heading_tolerance)
+                                                 {
+                                                     LOG_WARNING << "[LIDAR/Heading] Deviation! Err: " << heading_error << "°. Correcting...";
+                                                     int left_speed, right_speed;
+
+                                                     // Khi lùi và có lệch hướng, điều chỉnh nhẹ nhàng hơn
+                                                     if (is_reversing)
+                                                     {
+                                                         // Giảm độ nhạy khi lùi bằng cách chia correction cho 2
+                                                         float reduced_error = heading_error * 0.5f;
+                                                         calculateDifferentialSpeed(reduced_error, base_speed, left_speed, right_speed);
+                                                     }
+                                                     else
+                                                     {
+                                                         calculateDifferentialSpeed(heading_error, base_speed, left_speed, right_speed);
+                                                     }
+
+                                                     plc_command_queue_.push("WRITE_D104_" + std::to_string(left_speed));
+                                                     plc_command_queue_.push("WRITE_D105_" + std::to_string(right_speed));
+                                                 }
+                                                 else
+                                                 {
+                                                     // Nếu đi đúng hướng, 2 bánh cùng tốc độ
+                                                     plc_command_queue_.push("WRITE_D104_" + std::to_string(base_speed));
+                                                     plc_command_queue_.push("WRITE_D105_" + std::to_string(base_speed));
+                                                 }
+
+                                                 // Log thông tin debug
+                                                 if (is_reversing)
+                                                 {
+                                                     LOG_INFO << "[LIDAR/Heading] Reversing - Speed: " << base_speed
+                                                              << ", Heading: " << current_heading << "°"
+                                                              << ", Target: " << target.target_heading << "°"
+                                                              << ", Error: " << heading_error << "°";
+                                                 }
+
+                                                 // =================================================================
+                                                 // LOGIC RẼ VÒNG CUNG (ARC TURN)
+                                                 // =================================================================
+                                                 ArcDirection direction;
+                                                 {
+                                                     std::lock_guard<std::mutex> lock(arc_direction_mutex_);
+                                                     direction = arc_direction_;
+                                                 }
+
+                                                 if (direction != ArcDirection::NONE)
+                                                 {
+                                                     int outer_speed = base_speed;
+                                                     int inner_speed = base_speed / 2; // Bánh trong chạy bằng nửa tốc độ
+
+                                                     if (direction == ArcDirection::LEFT)
+                                                     {
+                                                         LOG_INFO << "[LIDAR/ARC] Arc Left - BaseSpeed: " << base_speed << " -> L:" << outer_speed << ", R:" << inner_speed;
+                                                         plc_command_queue_.push("WRITE_D104_" + std::to_string(outer_speed)); // Bánh trái (ngoài)
+                                                         plc_command_queue_.push("WRITE_D105_" + std::to_string(inner_speed)); // Bánh phải (trong)
+                                                     }
+                                                     else
+                                                     { // ArcDirection::RIGHT
+                                                         LOG_INFO << "[LIDAR/ARC] Arc Right - BaseSpeed: " << base_speed << " -> L:" << inner_speed << ", R:" << outer_speed;
+                                                         plc_command_queue_.push("WRITE_D104_" + std::to_string(inner_speed)); // Bánh trái (trong)
+                                                         plc_command_queue_.push("WRITE_D105_" + std::to_string(outer_speed)); // Bánh phải (ngoài)
+                                                     }
+                                                 }
+
+                                                 // =================================================================
+                                                 // KẾT THÚC LOGIC HEADING CORRECTION
+                                                 // =================================================================
+                                             });
 
         // // Callback xử lý dữ liệu ổn định để gửi lên server.
         // lidar_processor->setStablePointsCallback([this](const std::vector<LidarPoint>& stable_points) {
@@ -828,7 +925,8 @@ if (direction != ArcDirection::NONE) {
         // });
 
         // Monitor loop - kiểm tra health định kỳ
-        while (running_ && lidar_processor->isConnectionHealthy()) {
+        while (running_ && lidar_processor->isConnectionHealthy())
+        {
             std::this_thread::sleep_for(std::chrono::seconds(1));
 
             // Update connection status
@@ -845,21 +943,22 @@ if (direction != ArcDirection::NONE) {
         {
             std::lock_guard<std::mutex> lock(state_.state_mutex);
             state_.lidar_connected = false;
-            state_.is_safe_to_move = false;  // Set unsafe khi mất LiDAR
+            state_.is_safe_to_move = false; // Set unsafe khi mất LiDAR
         }
 
         // Gửi lệnh dừng khẩn cấp nếu đang di chuyển
-        if (state_.is_moving) {
-            plc_command_queue_.push("WRITE_D100_0");  // Stop
-            plc_command_queue_.push("WRITE_D103_0");  // Safety OFF
-            plc_command_queue_.push("WRITE_D104_0");  // Left wheel stop
-            plc_command_queue_.push("WRITE_D105_0");  // Right wheel stop
+        if (state_.is_moving)
+        {
+            plc_command_queue_.push("WRITE_D100_0"); // Stop
+            plc_command_queue_.push("WRITE_D103_0"); // Safety OFF
+            plc_command_queue_.push("WRITE_D104_0"); // Left wheel stop
+            plc_command_queue_.push("WRITE_D105_0"); // Right wheel stop
             LOG_WARNING << "[LiDAR Thread] Emergency stop due to LiDAR disconnection";
         }
 
         // Đợi trước khi thử khởi động lại
         LOG_INFO << "[LiDAR Thread] Entering main loop.";
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));// Đợi 1 giây trước khi thử lại
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // Đợi 1 giây trước khi thử lại
     }
     // Dừng và dọn dẹp khi luồng kết thúc.
     LOG_INFO << "[LiDAR Thread] Stopped.";
@@ -874,18 +973,22 @@ if (direction != ArcDirection::NONE) {
  * - Chuyển đổi các lệnh từ server (ví dụ: `MOVE_TO_POINT`) thành các lệnh cụ thể cho PLC (ví dụ: `WRITE_D100_1`).
  * - Đẩy các lệnh PLC vào `plc_command_queue_`.
  */
-void SystemManager::command_handler_thread() {
+void SystemManager::command_handler_thread()
+{
     pin_thread_to_core(3);
     LOG_INFO << "[Command Handler] Thread started. Waiting for commands from server...";
 
-    while (running_) {
+    while (running_)
+    {
         ServerComm::NavigationCommand cmd;
-        
-        if (comm_server_->getNextCommand(cmd)) {
+
+        if (comm_server_->getNextCommand(cmd))
+        {
             LOG_INFO << "[Command Handler] Processing command type: " << static_cast<int>(cmd.type);
 
             // KIỂM TRA LỆNH LẶP LẠI
-            if (cmd.type == last_processed_cmd_type_) {
+            if (cmd.type == last_processed_cmd_type_)
+            {
                 LOG_INFO << "[Command Handler] Ignoring duplicate command: " << static_cast<int>(cmd.type);
                 continue;
             }
@@ -897,62 +1000,22 @@ void SystemManager::command_handler_thread() {
                 is_safe = state_.is_safe_to_move;
             }
 
-            if (plc_in_error_state_ || plc_ptr_ == nullptr || !plc_ptr_->isConnected()) {
+            if (plc_in_error_state_ || plc_ptr_ == nullptr || !plc_ptr_->isConnected())
+            {
                 LOG_ERROR << "[Command Handler] Command ignored! PLC not ready";
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 continue;
             }
 
-            switch (cmd.type) {
-                case ServerComm::NavigationCommand::MOVE_TO_POINT: {
-                    LOG_INFO << "[Command Handler] Processing MOVE_TO_POINT command";
-                    
-                    if (is_safe) {
-                        // LƯU LẠI GÓC HIỆN TẠI LÀM MỤC TIÊU
-                        float current_heading;
-                        {
-                            std::lock_guard<std::mutex> lock(state_.state_mutex);
-                            current_heading = state_.current_heading;
-                            state_.movement_command_active = true;
-                            state_.is_moving = false;
-                        }
-                        
-                        // Cập nhật movement target
-                        {
-                            std::lock_guard<std::mutex> lock(movement_target_mutex_);
-                            current_movement_.is_active = true;
-                            current_movement_.target_heading = current_heading;
-                            current_movement_.heading_tolerance = 2.0f;  // ±2°
-                            current_movement_.is_forward = true;
-                            current_movement_.start_time = std::chrono::steady_clock::now();
-                            
-                            // Reset PID controller
-                            heading_pid_.reset();
-                        }
-                        
-                        LOG_INFO << "[Command Handler] Target heading locked at: " 
-                                 << current_heading << "°";
-                        
-                        // Lưu lại lệnh
-                        {
-                            std::lock_guard<std::mutex> lock(last_command_mutex_);
-                            last_movement_command_ = "WRITE_D100_1";
-                        }
-                        
-                        // Gửi lệnh di chuyển
-                        plc_command_queue_.push("WRITE_D101_0");  // Hướng: thẳng
-                        plc_command_queue_.push("WRITE_D100_1");  // Bắt đầu di chuyển
-                        
-                    } else {
-                        LOG_WARNING << "[Command Handler] Cannot execute - obstacle detected!";
-                    }
-                    break;
-                }
-                
-                case ServerComm::NavigationCommand::REVERSE_TO_POINT: {
-                    LOG_INFO << "[Command Handler] Processing REVERSE_TO_POINT command";
-                    
-                    // LƯU LẠI GÓC HIỆN TẠI
+            switch (cmd.type)
+            {
+            case ServerComm::NavigationCommand::MOVE_TO_POINT:
+            {
+                LOG_INFO << "[Command Handler] Processing MOVE_TO_POINT command";
+
+                if (is_safe)
+                {
+                    // LƯU LẠI GÓC HIỆN TẠI LÀM MỤC TIÊU
                     float current_heading;
                     {
                         std::lock_guard<std::mutex> lock(state_.state_mutex);
@@ -960,96 +1023,146 @@ void SystemManager::command_handler_thread() {
                         state_.movement_command_active = true;
                         state_.is_moving = false;
                     }
-                    
+
                     // Cập nhật movement target
                     {
                         std::lock_guard<std::mutex> lock(movement_target_mutex_);
                         current_movement_.is_active = true;
                         current_movement_.target_heading = current_heading;
-                        current_movement_.heading_tolerance = 3.0f;  // ±3° (rộng hơn khi lùi)
-                        current_movement_.is_forward = false;
+                        current_movement_.heading_tolerance = 2.0f; // ±2°
+                        current_movement_.is_forward = true;
                         current_movement_.start_time = std::chrono::steady_clock::now();
-                        
+
+                        // Reset PID controller
                         heading_pid_.reset();
                     }
-                    
-                    LOG_INFO << "[Command Handler] Reverse target heading locked at: " 
+
+                    LOG_INFO << "[Command Handler] Target heading locked at: "
                              << current_heading << "°";
-                    
+
+                    // Lưu lại lệnh
                     {
                         std::lock_guard<std::mutex> lock(last_command_mutex_);
-                        last_movement_command_ = "WRITE_D100_2";
+                        last_movement_command_ = "WRITE_D100_1";
                     }
-                    
-                    plc_command_queue_.push("WRITE_D101_0");
-                    plc_command_queue_.push("WRITE_D100_2");  // Lùi
-                    break;
+
+                    // Gửi lệnh di chuyển
+                    plc_command_queue_.push("WRITE_D101_0"); // Hướng: thẳng
+                    plc_command_queue_.push("WRITE_D100_1"); // Bắt đầu di chuyển
                 }
-                
-                case ServerComm::NavigationCommand::ROTATE_TO_LEFT:
-                case ServerComm::NavigationCommand::ROTATE_TO_RIGHT: 
+                else
                 {
-                    LOG_INFO << "[Command Handler] Processing arc rotation command";
-
-                    // Tắt heading correction vì chúng ta chủ động muốn thay đổi hướng
-                    {
-                        std::lock_guard<std::mutex> lock(movement_target_mutex_);
-                        current_movement_.is_active = false;
-                    }
-
-                    // Đặt trạng thái rẽ vòng cung
-                    {
-                        std::lock_guard<std::mutex> lock(arc_direction_mutex_);
-                        arc_direction_ = (cmd.type == ServerComm::NavigationCommand::ROTATE_TO_LEFT) ? ArcDirection::LEFT : ArcDirection::RIGHT;
-                    }
-                    
-                    if (is_safe) {
-                        {
-                            std::lock_guard<std::mutex> lock(state_.state_mutex);
-                            state_.movement_command_active = true;
-                            state_.is_moving = true; // Bắt đầu di chuyển ngay
-                            state_.movement_pending = true;
-                        }
-                    } else {
-                        LOG_WARNING << "[Command Handler] Cannot execute rotation - obstacle detected!";
-                    }
-                    break;
+                    LOG_WARNING << "[Command Handler] Cannot execute - obstacle detected!";
                 }
-                
-                case ServerComm::NavigationCommand::STOP:
-                case ServerComm::NavigationCommand::EMERGENCY_STOP: {
-                    LOG_INFO << "[Command Handler] Executing STOP command";
-                    
-                    // VÔ HIỆU HÓA heading correction
-                    {
-                        std::lock_guard<std::mutex> lock(movement_target_mutex_);
-                        current_movement_.is_active = false;
-                        heading_pid_.reset();
-                    }
-                    
-                    plc_command_queue_.push("WRITE_D100_0");
-                    plc_command_queue_.push("WRITE_D101_0");
-                    
-                    {
-                        std::lock_guard<std::mutex> lock(last_command_mutex_);
-                        last_movement_command_.clear();
-                    }
+                break;
+            }
+
+            case ServerComm::NavigationCommand::REVERSE_TO_POINT:
+            {
+                LOG_INFO << "[Command Handler] Processing REVERSE_TO_POINT command";
+
+                // LƯU LẠI GÓC HIỆN TẠI
+                float current_heading;
+                {
+                    std::lock_guard<std::mutex> lock(state_.state_mutex);
+                    current_heading = state_.current_heading;
+                    state_.movement_command_active = true;
+                    state_.is_moving = false;
+                }
+
+                // Cập nhật movement target
+                {
+                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                    current_movement_.is_active = true;
+                    current_movement_.target_heading = current_heading;
+                    current_movement_.heading_tolerance = 3.0f; // ±3° (rộng hơn khi lùi)
+                    current_movement_.is_forward = false;
+                    current_movement_.start_time = std::chrono::steady_clock::now();
+
+                    heading_pid_.reset();
+                }
+
+                LOG_INFO << "[Command Handler] Reverse target heading locked at: "
+                         << current_heading << "°";
+
+                {
+                    std::lock_guard<std::mutex> lock(last_command_mutex_);
+                    last_movement_command_ = "WRITE_D100_2";
+                }
+
+                plc_command_queue_.push("WRITE_D101_0");
+                plc_command_queue_.push("WRITE_D100_2"); // Lùi
+                break;
+            }
+
+            case ServerComm::NavigationCommand::ROTATE_TO_LEFT:
+            case ServerComm::NavigationCommand::ROTATE_TO_RIGHT:
+            {
+                LOG_INFO << "[Command Handler] Processing arc rotation command";
+
+                // Tắt heading correction vì chúng ta chủ động muốn thay đổi hướng
+                {
+                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                    current_movement_.is_active = false;
+                }
+
+                // Đặt trạng thái rẽ vòng cung
+                {
+                    std::lock_guard<std::mutex> lock(arc_direction_mutex_);
+                    arc_direction_ = (cmd.type == ServerComm::NavigationCommand::ROTATE_TO_LEFT) ? ArcDirection::LEFT : ArcDirection::RIGHT;
+                }
+
+                if (is_safe)
+                {
                     {
                         std::lock_guard<std::mutex> lock(state_.state_mutex);
-                        state_.movement_command_active = false;
-                        state_.is_moving = false;
+                        state_.movement_command_active = true;
+                        state_.is_moving = true; // Bắt đầu di chuyển ngay
+                        state_.movement_pending = true;
                     }
-                    break;
                 }
-                
-                default:
-                    LOG_WARNING << "[Command Handler] Unknown command type";
-                    break;
+                else
+                {
+                    LOG_WARNING << "[Command Handler] Cannot execute rotation - obstacle detected!";
+                }
+                break;
+            }
+
+            case ServerComm::NavigationCommand::STOP:
+            case ServerComm::NavigationCommand::EMERGENCY_STOP:
+            {
+                LOG_INFO << "[Command Handler] Executing STOP command";
+
+                // VÔ HIỆU HÓA heading correction
+                {
+                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                    current_movement_.is_active = false;
+                    heading_pid_.reset();
+                }
+
+                plc_command_queue_.push("WRITE_D100_0");
+                plc_command_queue_.push("WRITE_D101_0");
+
+                {
+                    std::lock_guard<std::mutex> lock(last_command_mutex_);
+                    last_movement_command_.clear();
+                }
+                {
+                    std::lock_guard<std::mutex> lock(state_.state_mutex);
+                    state_.movement_command_active = false;
+                    state_.is_moving = false;
+                }
+                break;
+            }
+
+            default:
+                LOG_WARNING << "[Command Handler] Unknown command type";
+                break;
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    
+
     LOG_INFO << "[Command Handler] Thread stopped.";
 }
 
@@ -1062,52 +1175,57 @@ void SystemManager::command_handler_thread() {
  *   - Nếu trạng thái chuyển từ an toàn (`was_safe=true`) sang không an toàn (`is_safe=false`), gửi lệnh dừng khẩn cấp đến PLC.
  *   - Nếu trạng thái chuyển từ không an toàn sang an toàn, kiểm tra `last_movement_command_` và gửi lại lệnh đó để AGV tự động tiếp tục di chuyển.
  */
-void SystemManager::safety_monitor_thread() {
+void SystemManager::safety_monitor_thread()
+{
     pin_thread_to_core(0);
     LOG_INFO << "[Safety Monitor] Started.";
     bool was_safe = true;
 
-    while (running_) {
+    while (running_)
+    {
         bool is_safe;
         {
             std::lock_guard<std::mutex> lock(state_.state_mutex);
             is_safe = state_.is_safe_to_move;
         }
 
-        if (was_safe && !is_safe) {
+        if (was_safe && !is_safe)
+        {
             LOG_WARNING << "[Safety Monitor] DANGER! Stopping movement";
-            
+
             // VÔ HIỆU HÓA heading correction
             {
                 std::lock_guard<std::mutex> lock(movement_target_mutex_);
                 current_movement_.is_active = false;
                 heading_pid_.reset();
             }
-            
+
             plc_command_queue_.push("WRITE_D100_0");
             plc_command_queue_.push("WRITE_D101_0");
-        } 
-        else if (!was_safe && is_safe) {
+        }
+        else if (!was_safe && is_safe)
+        {
             LOG_INFO << "[Safety Monitor] Path clear. Checking for command to resume...";
             std::lock_guard<std::mutex> lock(last_command_mutex_);
-            
-            if (!last_movement_command_.empty() && !plc_in_error_state_) {
+
+            if (!last_movement_command_.empty() && !plc_in_error_state_)
+            {
                 LOG_INFO << "[Safety Monitor] Resuming: " << last_movement_command_;
-                
+
                 // KHÔI PHỤC heading correction
                 float current_heading;
                 {
                     std::lock_guard<std::mutex> lock2(state_.state_mutex);
                     current_heading = state_.current_heading;
                 }
-                
+
                 {
                     std::lock_guard<std::mutex> lock2(movement_target_mutex_);
                     current_movement_.is_active = true;
                     current_movement_.target_heading = current_heading;
                     heading_pid_.reset();
                 }
-                
+
                 plc_command_queue_.push(last_movement_command_);
             }
         }
@@ -1115,7 +1233,7 @@ void SystemManager::safety_monitor_thread() {
         was_safe = is_safe;
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    
+
     LOG_INFO << "[Safety Monitor] Stopped.";
 }
 
@@ -1125,12 +1243,14 @@ void SystemManager::safety_monitor_thread() {
  * - Ghim luồng vào CPU core 1.
  * - Gửi lệnh `WRITE_D200_1` đến PLC mỗi 500ms. Lệnh này có thể được dùng như một tín hiệu "heartbeat" để PLC biết rằng phần mềm vẫn đang hoạt động.
  */
-void SystemManager::plc_periodic_tasks_thread() {
+void SystemManager::plc_periodic_tasks_thread()
+{
     pin_thread_to_core(1);
     LOG_INFO << "[PLC Periodic] Thread started.";
     std::this_thread::sleep_for(std::chrono::seconds(5));
 
-    while (running_) {
+    while (running_)
+    {
         plc_command_queue_.push("WRITE_D200_1");
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -1145,23 +1265,29 @@ void SystemManager::plc_periodic_tasks_thread() {
  * - Khởi tạo kết nối đến BMS qua cổng serial.
  * - Vòng lặp chính: Cứ sau 20 giây, gọi `bms.updateBatteryData()` để đọc dữ liệu mới và cập nhật `battery_level` và `battery_connected` trong `state_`.
  */
-void SystemManager::battery_thread_func() {
+void SystemManager::battery_thread_func()
+{
     pin_thread_to_core(2);
     LOG_INFO << "[Battery Thread] Starting...";
 
-    JBDBMSSingleton& bms = JBDBMSSingleton::getInstance(BATTERY_BMS_SERIAL_PORT);
+    JBDBMSSingleton &bms = JBDBMSSingleton::getInstance(BATTERY_BMS_SERIAL_PORT);
     bool is_bms_initialized = false; // Cờ theo dõi trạng thái kết nối cục bộ
 
     // Vòng lặp quản lý trạng thái chính
-    while (running_) {
-        if (is_bms_initialized) {
+    while (running_)
+    {
+        if (is_bms_initialized)
+        {
             // ----- TRẠNG THÁI: ĐÃ KẾT NỐI -> CẬP NHẬT DỮ LIỆU -----
-            if (bms.updateBatteryData()) { // Cập nhật thành công
+            if (bms.updateBatteryData())
+            { // Cập nhật thành công
                 BatteryData data = bms.getBatteryData();
                 std::lock_guard<std::mutex> lock(state_.state_mutex);
                 state_.battery_connected = true;
                 state_.battery_level = data.stateOfCharge;
-            } else {
+            }
+            else
+            {
                 // Nếu update thất bại, coi như mất kết nối và thử kết nối lại
                 LOG_WARNING << "[Battery Thread] Failed to update BMS data. Connection likely lost.";
                 is_bms_initialized = false; // Kích hoạt logic kết nối lại ở lần lặp sau
@@ -1172,14 +1298,18 @@ void SystemManager::battery_thread_func() {
             }
             // Đợi 20 giây cho lần cập nhật tiếp theo
             std::this_thread::sleep_for(std::chrono::seconds(20));
-
-        } else {
+        }
+        else
+        {
             // ----- TRẠNG THÁI: MẤT KẾT NỐI -> THỬ KẾT NỐI LẠI -----
             LOG_INFO << "[Battery Thread] Attempting to initialize BMS connection...";
-            if (bms.initialize()) { // Kết nối thành công
+            if (bms.initialize())
+            { // Kết nối thành công
                 LOG_INFO << "[Battery Thread] BMS connected successfully.";
                 is_bms_initialized = true; // Đánh dấu đã kết nối thành công
-            } else {
+            }
+            else
+            {
                 LOG_ERROR << "[Battery Thread] Failed to initialize BMS. Retrying in 5 seconds...";
                 {
                     std::lock_guard<std::mutex> lock(state_.state_mutex);
@@ -1200,27 +1330,35 @@ void SystemManager::battery_thread_func() {
  * @param points Vector chứa tất cả các điểm LiDAR.
  * @return Vector chứa các điểm LiDAR đã được lấy mẫu.
  */
-std::vector<ServerComm::Point2D> SystemManager::sampleImportantPoints(const std::vector<ServerComm::Point2D>& points) {
-    if (points.empty()) {
+std::vector<ServerComm::Point2D> SystemManager::sampleImportantPoints(const std::vector<ServerComm::Point2D> &points)
+{
+    if (points.empty())
+    {
         return {};
     }
 
-   std::vector<ServerComm::Point2D> result;
+    std::vector<ServerComm::Point2D> result;
     // Dành trước bộ nhớ để tăng hiệu năng, tránh cấp phát lại nhiều lần
     result.reserve(points.size() / 2); // Ước tính kích thước sau khi sampling
 
     // Duyệt qua tất cả các điểm đầu vào
-    for (const auto& p : points) {
+    for (const auto &p : points)
+    {
         // Tính khoảng cách từ điểm đến tâm (vị trí của LiDAR)
         float dist = sqrt(p.x * p.x + p.y * p.y);
 
-        if (dist < 2.0f) {
+        if (dist < 2.0f)
+        {
             // Giữ lại 100% các điểm ở khoảng cách dưới 2 mét
             result.push_back(p);
-        } else if (dist < 5.0f && (rand() % 2 == 0)) {
+        }
+        else if (dist < 5.0f && (rand() % 2 == 0))
+        {
             // Giữ lại ngẫu nhiên 50% các điểm ở khoảng cách từ 2 đến 5 mét
             result.push_back(p);
-        } else if (rand() % 4 == 0) {
+        }
+        else if (rand() % 4 == 0)
+        {
             // Giữ lại ngẫu nhiên 25% các điểm ở khoảng cách xa hơn 5 mét
             result.push_back(p);
         }
@@ -1239,20 +1377,24 @@ std::vector<ServerComm::Point2D> SystemManager::sampleImportantPoints(const std:
  * - Kiểm tra an toàn (nghiêng, va chạm).
  * - Cập nhật state_ để các thread khác sử dụng.
  */
-void SystemManager::imu_thread_func() {
+void SystemManager::imu_thread_func()
+{
     pin_thread_to_core(2);
     LOG_INFO << "[IMU Thread] Starting MPU9250 navigation system...";
 
     // Vòng lặp chính để quản lý kết nối và xử lý dữ liệu IMU
-    while (running_) {
+    while (running_)
+    {
         imu_ptr_ = std::make_unique<AGVNavigation>();
-        
+
         // Thử khởi tạo với retry
         int init_attempts = 0;
         bool initialized = false;
 
-        while (init_attempts < 3 && running_) {
-            if (imu_ptr_->begin("/dev/i2c-1")) {
+        while (init_attempts < 3 && running_)
+        {
+            if (imu_ptr_->begin("/dev/i2c-1"))
+            {
                 initialized = true;
                 LOG_INFO << "[IMU Thread] MPU9250 initialized successfully";
                 break;
@@ -1264,12 +1406,13 @@ void SystemManager::imu_thread_func() {
             init_attempts++;
         }
 
-        if (!initialized) {
+        if (!initialized)
+        {
             LOG_ERROR << "[IMU Thread] Failed to initialize after 3 attempts";
             std::lock_guard<std::mutex> lock(state_.state_mutex);
             state_.imu_connected = false;
             state_.last_imu_data = "IMU initialization failed";
-            
+
             // Đợi 10 giây rồi thử lại
             std::this_thread::sleep_for(std::chrono::seconds(10));
             continue;
@@ -1278,11 +1421,11 @@ void SystemManager::imu_thread_func() {
         // Hiệu chuẩn gyroscope
         LOG_INFO << "[IMU Thread] Calibrating gyroscope...";
         imu_ptr_->calibrateGyro(2000);
-        
+
         // Cấu hình tham số an toàn
-        imu_ptr_->setMaxTiltAngle(30.0f);        // 30° max tilt
-        imu_ptr_->setCollisionThreshold(3.0f);   // 3g collision threshold
-        imu_ptr_->setFilterBeta(0.08f);          // Madgwick filter gain
+        imu_ptr_->setMaxTiltAngle(30.0f);      // 30° max tilt
+        imu_ptr_->setCollisionThreshold(3.0f); // 3g collision threshold
+        imu_ptr_->setFilterBeta(0.08f);        // Madgwick filter gain
 
         {
             std::lock_guard<std::mutex> lock(state_.state_mutex);
@@ -1296,8 +1439,10 @@ void SystemManager::imu_thread_func() {
         int consecutive_errors = 0;
         const int MAX_CONSECUTIVE_ERRORS = 50; // ~0.5 giây ở 100Hz
 
-        while (running_ && consecutive_errors < MAX_CONSECUTIVE_ERRORS) {
-            try {
+        while (running_ && consecutive_errors < MAX_CONSECUTIVE_ERRORS)
+        {
+            try
+            {
                 // Update sensor fusion (Madgwick filter)
                 imu_ptr_->update();
 
@@ -1315,7 +1460,7 @@ void SystemManager::imu_thread_func() {
                 // Safety checks
                 bool is_safe = imu_ptr_->isSafe();
                 bool is_tilted = imu_ptr_->isTilted();
-                const char* compass_dir = imu_ptr_->getCompassDirection();
+                const char *compass_dir = imu_ptr_->getCompassDirection();
 
                 // Update shared state
                 {
@@ -1353,12 +1498,14 @@ void SystemManager::imu_thread_func() {
                     latest_imu_data_.is_safe = is_safe;
                     latest_imu_data_.compass_direction = compass_dir;
                     latest_imu_data_.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::system_clock::now().time_since_epoch()).count();
+                                                     std::chrono::system_clock::now().time_since_epoch())
+                                                     .count();
                 }
 
                 // Log periodically (mỗi giây)
                 static int log_counter = 0;
-                if (++log_counter >= 50) { // Log mỗi 0.5 giây (50 samples @ 100Hz)
+                if (++log_counter >= 50)
+                { // Log mỗi 0.5 giây (50 samples @ 100Hz)
                     // Lấy giá trị yaw chưa chuẩn hóa để debug
                     float raw_yaw = imu_ptr_->getRawYaw();
 
@@ -1370,22 +1517,24 @@ void SystemManager::imu_thread_func() {
                                << " | Pitch: " << pitch << "°"
                                << " | Gyro(Z): " << gz << " dps";
                     LOG_INFO << imu_log_ss.str();
-                    
-                    // LOG_INFO << "[IMU Thread] Heading: " << heading << "° (" << compass_dir 
-                    //          << "), Roll: " << roll << "°, Pitch: " << pitch 
+
+                    // LOG_INFO << "[IMU Thread] Heading: " << heading << "° (" << compass_dir
+                    //          << "), Roll: " << roll << "°, Pitch: " << pitch
                     //          << "°, Temp: " << temp << "°C";
                     log_counter = 0; // Reset counter
                 }
 
                 // Cảnh báo nếu nghiêng nguy hiểm
-                if (is_tilted && !is_safe) {
-                    LOG_WARNING << "[IMU Thread] DANGER: Excessive tilt detected! Roll: " 
+                if (is_tilted && !is_safe)
+                {
+                    LOG_WARNING << "[IMU Thread] DANGER: Excessive tilt detected! Roll: "
                                 << roll << "°, Pitch: " << pitch << "°";
                 }
 
                 consecutive_errors = 0; // Reset error counter on success
-
-            } catch (const std::exception& e) {
+            }
+            catch (const std::exception &e)
+            {
                 LOG_ERROR << "[IMU Thread] Error reading IMU data: " << e.what();
                 consecutive_errors++;
             }
@@ -1414,9 +1563,12 @@ void SystemManager::imu_thread_func() {
 /**
  * @brief Chuẩn hóa góc về khoảng [0, 360)
  */
-float SystemManager::normalizeAngle(float angle) {
-    while (angle < 0.0f) angle += 360.0f;
-    while (angle >= 360.0f) angle -= 360.0f;
+float SystemManager::normalizeAngle(float angle)
+{
+    while (angle < 0.0f)
+        angle += 360.0f;
+    while (angle >= 360.0f)
+        angle -= 360.0f;
     return angle;
 }
 
@@ -1424,19 +1576,23 @@ float SystemManager::normalizeAngle(float angle) {
  * @brief Tính sai số góc ngắn nhất giữa góc hiện tại và góc mục tiêu
  * @return Sai số trong khoảng [-180, 180]
  */
-float SystemManager::calculateHeadingError(float current, float target) {
+float SystemManager::calculateHeadingError(float current, float target)
+{
     current = normalizeAngle(current);
     target = normalizeAngle(target);
-    
+
     float error = target - current;
-    
+
     // Tìm đường đi ngắn nhất
-    if (error > 180.0f) {
+    if (error > 180.0f)
+    {
         error -= 360.0f;
-    } else if (error < -180.0f) {
+    }
+    else if (error < -180.0f)
+    {
         error += 360.0f;
     }
-    
+
     return error;
 }
 
@@ -1446,56 +1602,60 @@ float SystemManager::calculateHeadingError(float current, float target) {
  * @param base_speed Tốc độ cơ bản (smooth_speed từ LiDAR)
  * @param left_speed Output: tốc độ bánh trái
  * @param right_speed Output: tốc độ bánh phải
- * 
+ *
  * LOGIC:
  * - heading_error > 0 (cần quay PHẢI): GIẢM tốc bánh PHẢI
  * - heading_error < 0 (cần quay TRÁI): GIẢM tốc bánh TRÁI
  */
 void SystemManager::calculateDifferentialSpeed(float heading_error, int base_speed,
-                                               int &left_speed, int &right_speed) {
+                                               int &left_speed, int &right_speed)
+{
     // Tính toán PID
     heading_pid_.integral += heading_error;
-    
+
     // Anti-windup: giới hạn integral
-    if (heading_pid_.integral > heading_pid_.max_integral) {
+    if (heading_pid_.integral > heading_pid_.max_integral)
+    {
         heading_pid_.integral = heading_pid_.max_integral;
-    } else if (heading_pid_.integral < -heading_pid_.max_integral) {
+    }
+    else if (heading_pid_.integral < -heading_pid_.max_integral)
+    {
         heading_pid_.integral = -heading_pid_.max_integral;
     }
-    
+
     float derivative = heading_error - heading_pid_.last_error;
     heading_pid_.last_error = heading_error;
-    
+
     // PID output
     float correction = (heading_pid_.kp * heading_error) +
-                      (heading_pid_.ki * heading_pid_.integral) +
-                      (heading_pid_.kd * derivative);
-    
+                       (heading_pid_.ki * heading_pid_.integral) +
+                       (heading_pid_.kd * derivative);
+
     // Giới hạn correction (max 50% của base_speed)
     float max_correction = base_speed * 0.5f;
     correction = std::max(-max_correction, std::min(max_correction, correction));
-    
+
     // =====================================================
     // TÍNH TỐC ĐỘ 2 BÁNH
     // =====================================================
-    // CHÚ Ý: MPU9250 có X hướng PHẢI (Left-Hand Rule)
+    // CHÚ Ý: Với cấu hình Z-up, X-forward, Y-left:
     // heading_error > 0: Cần quay PHẢI → Giảm tốc bánh PHẢI
     // heading_error < 0: Cần quay TRÁI → Giảm tốc bánh TRÁI
     // =====================================================
-    
-    left_speed = base_speed + static_cast<int>(correction);
+
+    left_speed = base_speed - static_cast<int>(correction);
     right_speed = base_speed - static_cast<int>(correction);
-    
+
     // Đảm bảo tốc độ trong giới hạn [0, 3000]
     left_speed = std::max(0, std::min(3000, left_speed));
     right_speed = std::max(0, std::min(3000, right_speed));
-    
+
     LOG_INFO << "[PID] Base: " << base_speed
              << " | Err: " << std::fixed << std::setprecision(2) << heading_error << "°"
              << " | P: " << (heading_pid_.kp * heading_error)
              << " | I: " << (heading_pid_.ki * heading_pid_.integral)
              << " | D: " << (heading_pid_.kd * derivative)
-             << " | Corr: " << correction 
+             << " | Corr: " << correction
              << " -> L:" << left_speed << ", R:" << right_speed;
 }
 
@@ -1504,46 +1664,52 @@ void SystemManager::calculateDifferentialSpeed(float heading_error, int base_spe
  * @brief Tìm device bàn phím USB trong /dev/input/
  * @return Đường dẫn đến device (vd: /dev/input/event0) hoặc rỗng nếu không tìm thấy
  */
-std::string SystemManager::findKeyboardDevice() {
-    DIR* dir = opendir("/dev/input");
-    if (!dir) {
+std::string SystemManager::findKeyboardDevice()
+{
+    DIR *dir = opendir("/dev/input");
+    if (!dir)
+    {
         LOG_ERROR << "[Keyboard] Cannot open /dev/input";
         return "";
     }
-    
-    struct dirent* entry;
+
+    struct dirent *entry;
     std::string found_device;
-    
-    while ((entry = readdir(dir)) != nullptr) {
+
+    while ((entry = readdir(dir)) != nullptr)
+    {
         // Chỉ kiểm tra các file event*
-        if (strncmp(entry->d_name, "event", 5) != 0) {
+        if (strncmp(entry->d_name, "event", 5) != 0)
+        {
             continue;
         }
-        
+
         std::string device_path = std::string("/dev/input/") + entry->d_name;
         int fd = open(device_path.c_str(), O_RDONLY);
-        
-        if (fd < 0) {
+
+        if (fd < 0)
+        {
             continue;
         }
-        
+
         char name[256] = "Unknown";
         ioctl(fd, EVIOCGNAME(sizeof(name)), name);
-        
+
         // Tìm bàn phím (chứa "keyboard" hoặc "Keyboard")
         std::string device_name(name);
         std::transform(device_name.begin(), device_name.end(), device_name.begin(), ::tolower);
-        
-        if (device_name.find("keyboard") != std::string::npos) {
+
+        if (device_name.find("keyboard") != std::string::npos)
+        {
             found_device = device_path;
             LOG_INFO << "[Keyboard] Found keyboard: " << name << " at " << device_path;
             close(fd);
             break;
         }
-        
+
         close(fd);
     }
-    
+
     closedir(dir);
     return found_device;
 }
@@ -1554,34 +1720,37 @@ std::string SystemManager::findKeyboardDevice() {
  * - Đọc trực tiếp từ /dev/input/eventX (raw input events)
  * - Không cần terminal, hoạt động như service
  * - W: Tiến
- * - A: Xoay trái  
+ * - A: Xoay trái
  * - S: Lùi
  * - D: Xoay phải
  * - B: DỪNG (STOP)
- * 
+ *
  * Ghim vào CPU core 3
  */
-void SystemManager::keyboard_control_thread() {
+void SystemManager::keyboard_control_thread()
+{
     pin_thread_to_core(3);
     LOG_INFO << "[Keyboard Control] Thread started";
-    
+
     // Tìm bàn phím
-    std::string keyboard_device = "/dev/input/event5";//findKeyboardDevice();
-    
-    if (keyboard_device.empty()) {
+    std::string keyboard_device = "/dev/input/event5"; // findKeyboardDevice();
+
+    if (keyboard_device.empty())
+    {
         LOG_WARNING << "[Keyboard Control] No keyboard found. Thread disabled.";
         LOG_WARNING << "[Keyboard Control] Please plug in a USB keyboard and restart service.";
         return;
     }
-    
+
     // Mở device
     int fd = open(keyboard_device.c_str(), O_RDONLY | O_NONBLOCK);
-    if (fd < 0) {
-        LOG_ERROR << "[Keyboard Control] Cannot open " << keyboard_device 
+    if (fd < 0)
+    {
+        LOG_ERROR << "[Keyboard Control] Cannot open " << keyboard_device
                   << ": " << strerror(errno);
         return;
     }
-    
+
     // LOG_INFO << "[Keyboard Control] ===================================";
     // LOG_INFO << "[Keyboard Control]   ĐIỀU KHIỂN AGV BẰNG BÀN PHÍM   ";
     // LOG_INFO << "[Keyboard Control] ===================================";
@@ -1591,239 +1760,268 @@ void SystemManager::keyboard_control_thread() {
     // LOG_INFO << "[Keyboard Control]   D - Xoay phải                   ";
     // LOG_INFO << "[Keyboard Control]   B - DỪNG                        ";
     // LOG_INFO << "[Keyboard Control] ===================================";
-    
+
     struct input_event ev;
     char last_command = '\0';
-    
-    while (running_) {
+
+    while (running_)
+    {
         ssize_t bytes = read(fd, &ev, sizeof(ev));
-        
-        if (bytes < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+
+        if (bytes < 0)
+        {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            {
                 // Không có dữ liệu, sleep ngắn
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 continue;
-            } else {
+            }
+            else
+            {
                 LOG_ERROR << "[Keyboard Control] Read error: " << strerror(errno);
                 break;
             }
         }
-        
-        if (bytes != sizeof(ev)) {
+
+        if (bytes != sizeof(ev))
+        {
             continue;
         }
-        
+
         // Chỉ xử lý key press events (EV_KEY, value=1)
-        if (ev.type != EV_KEY || ev.value != 1) {
+        if (ev.type != EV_KEY || ev.value != 1)
+        {
             continue;
         }
-        
+
         char command = '\0';
-        
+
         // Map key codes sang commands
-        switch (ev.code) {
-            case KEY_W: command = 'w'; break;
-            case KEY_A: command = 'a'; break;
-            case KEY_S: command = 's'; break;
-            case KEY_D: command = 'd'; break;
-            case KEY_B: command = 'b'; break;
-            default: continue; // Bỏ qua các phím khác
+        switch (ev.code)
+        {
+        case KEY_W:
+            command = 'w';
+            break;
+        case KEY_A:
+            command = 'a';
+            break;
+        case KEY_S:
+            command = 's';
+            break;
+        case KEY_D:
+            command = 'd';
+            break;
+        case KEY_B:
+            command = 'b';
+            break;
+        default:
+            continue; // Bỏ qua các phím khác
         }
-        
+
         // Bỏ qua nếu trùng lệnh trước (trừ STOP)
-        if (command == last_command && command != 'b') {
+        if (command == last_command && command != 'b')
+        {
             continue;
         }
-        
+
         // Kiểm tra PLC
         bool plc_ready = false;
         {
             std::lock_guard<std::mutex> lock(plc_ptr_mutex_);
             plc_ready = (plc_ptr_ != nullptr && plc_ptr_->isConnected());
         }
-        
-        if (!plc_ready) {
+
+        if (!plc_ready)
+        {
             LOG_WARNING << "[Keyboard Control] PLC not connected! Command ignored.";
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
-        
-        // Xử lý commands
-        switch (command) {
-            case 'w': {
-                // TIẾN
-                LOG_INFO << "[Keyboard Control] ⬆️  FORWARD";
-                
-                bool is_safe;
-                float current_heading;
-                {
-                    std::lock_guard<std::mutex> lock(state_.state_mutex);
-                    is_safe = state_.is_safe_to_move;
-                    current_heading = state_.current_heading;
-                    state_.movement_command_active = true;
-                    state_.is_moving = false;
-                    state_.movement_pending = true; // Báo hiệu có lệnh di chuyển mới
-                }
-                
-                if (is_safe) {
-                    // Lưu heading target
-                    {
-                        std::lock_guard<std::mutex> lock(movement_target_mutex_);
-                        current_movement_.is_active = true;
-                        current_movement_.target_heading = current_heading;
-                        current_movement_.heading_tolerance = 2.0f;
-                        current_movement_.is_forward = true;
-                        current_movement_.start_time = std::chrono::steady_clock::now();
-                        heading_pid_.reset();
-                    }
-                    
-                    {
-                        std::lock_guard<std::mutex> lock(last_command_mutex_);
-                        last_movement_command_ = "WRITE_D100_1";
-                    }
-                    
-                    plc_command_queue_.push("WRITE_D101_0");
-                    plc_command_queue_.push("WRITE_D100_1");
-                    
-                    LOG_INFO << "[Keyboard Control] Target heading locked: " << current_heading << "°";
-                } else {
-                    LOG_WARNING << "[Keyboard Control] Không an toàn! Có vật cản phía trước.";
-                }
-                last_command = command;
-                break;
-            }
-            
-            case 's': {
-                // LÙI
-                LOG_INFO << "[Keyboard Control] REVERSE";
-                
-                float current_heading;
-                {
-                    std::lock_guard<std::mutex> lock(state_.state_mutex);
-                    current_heading = state_.current_heading;
-                    state_.movement_command_active = true;
-                    state_.is_moving = false;
-                    state_.movement_pending = true; // Báo hiệu có lệnh di chuyển mới
-                }
 
-                plc_command_queue_.push("WRITE_D101_0");
-                plc_command_queue_.push("WRITE_D100_2");
-                
+        // Xử lý commands
+        switch (command)
+        {
+        case 'w':
+        {
+            // TIẾN
+            LOG_INFO << "[Keyboard Control]  FORWARD";
+            LOG_INFO << "[khaipv] command forward received";
+            ;
+            bool is_safe;
+            float current_heading;
+            {
+                std::lock_guard<std::mutex> lock(state_.state_mutex);
+                is_safe = state_.is_safe_to_move;
+                current_heading = state_.current_heading;
+                state_.movement_command_active = true;
+                state_.is_moving = false;
+                state_.movement_pending = true; // Báo hiệu có lệnh di chuyển mới
+            }
+
+            if (is_safe)
+            {
+                // Lưu heading target
                 {
                     std::lock_guard<std::mutex> lock(movement_target_mutex_);
                     current_movement_.is_active = true;
                     current_movement_.target_heading = current_heading;
-                    current_movement_.heading_tolerance = 3.0f;
-                    current_movement_.is_forward = false;
+                    current_movement_.heading_tolerance = 2.0f;
+                    current_movement_.is_forward = true;
                     current_movement_.start_time = std::chrono::steady_clock::now();
                     heading_pid_.reset();
                 }
-                
+
                 {
                     std::lock_guard<std::mutex> lock(last_command_mutex_);
-                    last_movement_command_ = "WRITE_D100_2";
-                }
-                
-
-                
-                LOG_INFO << "[Keyboard Control] Reverse target heading: " << current_heading << "°";
-                last_command = command;
-                break;
-            }
-            
-            case 'a': {// D105 giảm
-                // XOAY TRÁI THEO VÒNG CUNG
-                LOG_INFO << "[Keyboard Control] ARC LEFT";
-                
-                // Tắt heading correction
-                {
-                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
-                    current_movement_.is_active = false;
+                    last_movement_command_ = "WRITE_D100_1";
                 }
 
-                // Đặt trạng thái rẽ vòng cung
-                {
-                    std::lock_guard<std::mutex> lock(arc_direction_mutex_);
-                    arc_direction_ = ArcDirection::RIGHT;
-                }
-                
-                {
-                    std::lock_guard<std::mutex> lock(state_.state_mutex);
-                    state_.movement_command_active = true;
-                    state_.is_moving = true;
-                    state_.movement_pending = true;
-                }
-                
-                last_command = command;
-                break;
-            }
-            
-            case 'd': { //D104 giảm
-                // XOAY PHẢI THEO VÒNG CUNG
-                LOG_INFO << "[Keyboard Control] ARC RIGHT";
-                
-                // Tắt heading correction
-                {
-                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
-                    current_movement_.is_active = false;
-                }
-
-                // Đặt trạng thái rẽ vòng cung
-                {
-                    std::lock_guard<std::mutex> lock(arc_direction_mutex_);
-                    arc_direction_ = ArcDirection::LEFT;
-                }
-                
-                {
-                    std::lock_guard<std::mutex> lock(state_.state_mutex);
-                    state_.movement_command_active = true;
-                    state_.is_moving = true;
-                    state_.movement_pending = true;
-                }
-                
-                last_command = command;
-                break;
-            }
-            
-            case 'b': {
-                // DỪNG
-                LOG_INFO << "[Keyboard Control] STOP";
-                
-                {
-                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
-                    current_movement_.is_active = false;
-                    heading_pid_.reset();
-                }
-                
-                plc_command_queue_.push("WRITE_D100_0");
                 plc_command_queue_.push("WRITE_D101_0");
-                plc_command_queue_.push("WRITE_D104_0");
-                plc_command_queue_.push("WRITE_D105_0");
-                
-                {
-                    std::lock_guard<std::mutex> lock(last_command_mutex_);
-                    last_movement_command_.clear();
-                }
-                
-                {
-                    std::lock_guard<std::mutex> lock(state_.state_mutex);
-                    state_.movement_command_active = false;
-                    state_.is_moving = false;
-                    state_.movement_pending = false; // Hủy mọi lệnh đang chờ
-                }
-                
-                last_command = '\0'; // Reset để cho phép dừng liên tục
-                break;
+                plc_command_queue_.push("WRITE_D100_1");
+
+                LOG_INFO << "[Keyboard Control] Target heading locked: " << current_heading << "°";
             }
+            else
+            {
+                LOG_WARNING << "[Keyboard Control] Không an toàn! Có vật cản phía trước.";
+            }
+            last_command = command;
+            break;
+        }
+
+        case 's':
+        {
+            // LÙI
+            LOG_INFO << "[Keyboard Control] REVERSE";
+            LOG_INFO << "[khaipv] command reverse received";
+            float current_heading;
+            {
+                std::lock_guard<std::mutex> lock(state_.state_mutex);
+                current_heading = state_.current_heading;
+                state_.movement_command_active = true;
+                state_.is_moving = false;
+                state_.movement_pending = true; // Báo hiệu có lệnh di chuyển mới
+            }
+
+            plc_command_queue_.push("WRITE_D101_0");
+            plc_command_queue_.push("WRITE_D100_2");
+
+            {
+                std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                current_movement_.is_active = true;
+                current_movement_.target_heading = current_heading;
+                current_movement_.heading_tolerance = 3.0f;
+                current_movement_.is_forward = false;
+                current_movement_.start_time = std::chrono::steady_clock::now();
+                heading_pid_.reset();
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(last_command_mutex_);
+                last_movement_command_ = "WRITE_D100_2";
+            }
+
+            LOG_INFO << "[Keyboard Control] Reverse target heading: " << current_heading << "°";
+            last_command = command;
+            break;
+        }
+
+        case 'a':
+        { // D105 giảm
+            // XOAY TRÁI THEO VÒNG CUNG
+            LOG_INFO << "[Keyboard Control] ARC LEFT";
+            LOG_INFO << "[khaipv] command arc left received";
+            // Tắt heading correction
+            {
+                std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                current_movement_.is_active = false;
+            }
+
+            // Đặt trạng thái rẽ vòng cung
+            {
+                std::lock_guard<std::mutex> lock(arc_direction_mutex_);
+                arc_direction_ = ArcDirection::RIGHT;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(state_.state_mutex);
+                state_.movement_command_active = true;
+                state_.is_moving = true;
+                state_.movement_pending = true;
+            }
+
+            last_command = command;
+            break;
+        }
+
+        case 'd':
+        { // D104 giảm
+            // XOAY PHẢI THEO VÒNG CUNG
+            LOG_INFO << "[Keyboard Control] ARC RIGHT";
+            LOG_INFO << "[khaipv] command arc right received";
+            // Tắt heading correction
+            {
+                std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                current_movement_.is_active = false;
+            }
+
+            // Đặt trạng thái rẽ vòng cung
+            {
+                std::lock_guard<std::mutex> lock(arc_direction_mutex_);
+                arc_direction_ = ArcDirection::LEFT;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(state_.state_mutex);
+                state_.movement_command_active = true;
+                state_.is_moving = true;
+                state_.movement_pending = true;
+            }
+
+            last_command = command;
+            break;
+        }
+
+        case 'b':
+        {
+            // DỪNG
+            LOG_INFO << "[Keyboard Control] STOP";
+            LOG_INFO << "[khaipv] command stop received";
+            // VÔ HIỆU HÓA heading correction
+            {
+                std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                current_movement_.is_active = false;
+                heading_pid_.reset();
+            }
+
+            plc_command_queue_.push("WRITE_D100_0");
+            plc_command_queue_.push("WRITE_D101_0");
+            plc_command_queue_.push("WRITE_D104_0");
+            plc_command_queue_.push("WRITE_D105_0");
+
+            {
+                std::lock_guard<std::mutex> lock(last_command_mutex_);
+                last_movement_command_.clear();
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(state_.state_mutex);
+                state_.movement_command_active = false;
+                state_.is_moving = false;
+                state_.movement_pending = false; // Hủy mọi lệnh đang chờ
+            }
+
+            last_command = '\0'; // Reset để cho phép dừng liên tục
+            break;
+        }
         }
     }
-    
+
     close(fd);
     LOG_INFO << "[Keyboard Control] Thread stopped";
 }
 
 #endif
-
 
 // Lưu ý: Luồng server_communication_thread không còn được quản lý trực tiếp ở đây.
 // Nó được quản lý bên trong lớp ServerComm::CommunicationServer,
