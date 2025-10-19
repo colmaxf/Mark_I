@@ -168,7 +168,7 @@ public:
     // --- Network configuration ---
     CommunicationServer(const std::string& server_ip,
                        int server_port,
-                       int send_interval_ms = 200);
+                       int send_interval_ms = COMM_SEND_INTERVAL_MS);
     ~CommunicationServer();
     
     // --- Connection management ---
