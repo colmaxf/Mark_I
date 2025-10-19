@@ -226,6 +226,8 @@ private:
         float target_heading = 0.0f;         // Góc mục tiêu cần giữ
         float heading_tolerance = 2.0f;       // Dung sai ±2°
         bool is_forward = true;               // true: tiến, false: lùi
+        bool is_turning = false;              // true nếu đang thực hiện rẽ vòng cung
+        float turn_start_heading = 0.0f;     // Góc bắt đầu khi rẽ
         std::chrono::steady_clock::time_point start_time;
     };
     

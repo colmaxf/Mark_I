@@ -69,7 +69,7 @@ struct NavigationCommand {
         ROTATE_TO_LEFT,     ///< Quay trái.
         ROTATE_TO_RIGHT,    ///< Quay phải.
         ROTATE_180_LEFT,     ///< Quay trái 90 độ.
-        ROTATE_180_RIGHT,     ///< Đi theo một chuỗi các điểm đã định trước.
+        ROTATE_180_RIGHT,    ///< Quay phải 90 độ.
         EMERGENCY_STOP      ///< Lệnh dừng khẩn cấp, có độ ưu tiên cao nhất.
     };
     Type type;            ///< Loại lệnh điều hướng.
@@ -169,7 +169,7 @@ public:
     // --- Network configuration ---
     CommunicationServer(const std::string& server_ip,
                        int server_port,
-                       int send_interval_ms = 200);
+                       int send_interval_ms = COMM_SEND_INTERVAL_MS);
     ~CommunicationServer();
     
     // --- Connection management ---

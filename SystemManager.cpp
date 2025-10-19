@@ -1996,7 +1996,7 @@ void SystemManager::keyboard_control_thread()
                 {
                     std::lock_guard<std::mutex> lock(movement_target_mutex_);
                     current_movement_.is_active = true;
-                    current_movement_.is_turning = true;
+                    current_movement_.is_turning = true; // Đánh dấu đang rẽ
                     current_movement_.turn_start_heading = start_heading;
                     current_movement_.is_forward = true;
                 }
@@ -2064,7 +2064,7 @@ void SystemManager::keyboard_control_thread()
                 {
                     std::lock_guard<std::mutex> lock(movement_target_mutex_);
                     current_movement_.is_active = true;
-                    current_movement_.is_turning = true;
+                    current_movement_.is_turning = true; // Đánh dấu đang rẽ
                     current_movement_.turn_start_heading = start_heading;
                     current_movement_.is_forward = true;
                 }
