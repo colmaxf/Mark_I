@@ -755,6 +755,11 @@ void SystemManager::lidar_thread_func()
                                                              //smooth_speed = calculateSmoothSpeed(999.0f, true); // 999.0f để đạt tốc độ lùi tối đa
                                                              smooth_speed = 200;
                                                              LOG_INFO << "[Lidar Thread] Reversing with speed: " << smooth_speed;
+                                                             if (has_pending_movement) 
+                                                             {
+                                                                 state_.movement_pending = false;
+                                                                 LOG_INFO << "[Lidar Thread] Acknowledged pending reverse movement command.";
+                                                             }
                                                          }
                                                          else if (is_safe)
                                                          {
@@ -1528,17 +1533,42 @@ void SystemManager::applyHeadingCorrection()
         return;
     }
 
+    // QUAN TRỌNG: Kiểm tra pending trước khi check base_speed
+    bool check_pending = false;
+    {
+        std::lock_guard<std::mutex> lock(state_.state_mutex);
+        check_pending = state_.movement_pending;
+    }
+
     // Điều kiện dừng bánh xe:
     // 1. Tốc độ cơ bản = 0 (đã dừng hoặc đang giảm tốc về 0).
     // 2. HOẶC đang di chuyển tiến VÀ không an toàn.
     //    (Lưu ý: Điều kiện an toàn không áp dụng khi lùi).
-    if (base_speed == 0 || (target.is_forward && !is_safe))
+    if (base_speed == 0 || /*(target.is_forward && !is_safe)*/ check_pending)
     {
-        LOG_INFO << "[khaipv] Stopping heading correction as base_speed=0 or unsafe to move forward.";
+        // LOG_INFO << "[khaipv] Stopping heading correction as base_speed=0 or unsafe to move forward.";
+        // plc_command_queue_.push("WRITE_D104_0");
+        // plc_command_queue_.push("WRITE_D105_0");
+        // LOG_INFO << "[LIDAR/Heading] Wheels stopped. Reason: base_speed=" << base_speed
+        //          << ", is_forward=" << target.is_forward << ", is_safe=" << is_safe;
+            if (target.is_forward && is_safe)
+        {
+            base_speed = MIN_START_SPEED;
+            LOG_INFO << "[LIDAR/Heading] Starting with pending, speed: " << base_speed;
+        }
+        else if (is_reversing)
+        {
+            base_speed = 500;
+            LOG_INFO << "[LIDAR/Heading] Reverse starting with pending";
+        }
+        return;
+    }
+
+    // Nếu vẫn = 0 và không phải lùi, dừng
+    if (base_speed == 0 && !is_reversing)
+    {
         plc_command_queue_.push("WRITE_D104_0");
         plc_command_queue_.push("WRITE_D105_0");
-        LOG_INFO << "[LIDAR/Heading] Wheels stopped. Reason: base_speed=" << base_speed
-                 << ", is_forward=" << target.is_forward << ", is_safe=" << is_safe;
         return;
     }
 
@@ -1558,6 +1588,13 @@ void SystemManager::applyHeadingCorrection()
     }
     if (direction != ArcDirection::NONE)
     {
+
+            // Reset arc sau khi xử lý
+        {
+            std::lock_guard<std::mutex> lock(arc_direction_mutex_);
+            arc_direction_ = ArcDirection::NONE;
+        }
+
         int outer_speed = base_speed;
         int inner_speed = base_speed / 2; // Bánh trong chạy bằng nửa tốc độ
 
@@ -1933,7 +1970,7 @@ void SystemManager::keyboard_control_thread()
                 current_movement_.is_active = true;
                 current_movement_.target_heading = current_heading;
                 current_movement_.heading_tolerance = 3.0f;
-                    current_movement_.is_turning = false; // Không phải đang rẽ
+                current_movement_.is_turning = false; // Không phải đang rẽ
                 current_movement_.is_forward = false;
                 current_movement_.start_time = std::chrono::steady_clock::now();
                 heading_pid_.reset();
