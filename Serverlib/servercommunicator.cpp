@@ -86,6 +86,7 @@ std::string buildRealtimePacket(
     const std::map<std::string, uint16_t>& plc_registers,
     // const std::vector<Point2D>& stable_lidar_points,   
     const std::vector<Point2D>& realtime_lidar_points,
+    float current_heading,
     long timestamp) {
     
     std::vector<uint8_t> payload;
@@ -112,6 +113,10 @@ std::string buildRealtimePacket(
     // Đóng gói tốc độ
     uint32_t net_speed = float_to_net(current_speed);
     payload.insert(payload.end(), (uint8_t*)&net_speed, (uint8_t*)&net_speed + 4);
+
+        // Đóng gói Góc
+    uint32_t net_current_heading = float_to_net(current_heading);
+    payload.insert(payload.end(), (uint8_t*)&net_current_heading, (uint8_t*)&net_current_heading + 4);
     
     // Đóng gói timestamp
     uint64_t net_ts = htobe64(timestamp);
@@ -210,6 +215,7 @@ std::string buildRealtimePacket(
         payload.insert(payload.end(), (uint8_t*)&net_x, (uint8_t*)&net_x + 4);
         payload.insert(payload.end(), (uint8_t*)&net_y, (uint8_t*)&net_y + 4);
     }
+
 
     // --- Xây dựng header của gói tin ---
     std::string packet = buildPacket(REALTIME_STATUS, 0, payload);
@@ -370,15 +376,26 @@ void CommunicationServer::sendStatus(const AGVStatusPacket& status) {
         status.current_speed,
         status.plc_registers,
         // status.stable_lidar_points,    // Dữ liệu stable
-        status.realtime_lidar_points,  // Dữ liệu realtime       
+        status.realtime_lidar_points,  // Dữ liệu realtime 
+        status.current_heading,      
         status.timestamp
     );
     
     // Gửi gói tin với tiền tố là độ dài gói tin (4 bytes)
     uint32_t size = htonl(packet.size());
-    LOG_INFO << "[SERSEND] Sending packet size: " << packet.size() 
+    LOG_INFO << "[SERSEND] [khaipv] Sending packet size: " << packet.size(); 
             //  << ", Stable points: " << status.stable_lidar_points.size()
-             << ", Realtime points: " << status.realtime_lidar_points.size();
+    LOG_INFO << "[SERSEND] [khaipv] Realtime points: " << status.realtime_lidar_points.size();
+    LOG_INFO << "[SERSEND] [khaipv]: id: " << std::dec << status.id_agv
+             << ", battery: " << status.battery_level
+             << ", moving: " << status.is_moving
+             << ", safe: " << status.is_safe
+             << ", plc_conn: " << status.plc_connected
+             << ", lidar_conn: " << status.lidar_connected
+             << ", battery_conn: " << status.battery_connected
+             << ", speed: " << status.current_speed
+             << ", current heading: "<< status.current_heading
+             << ", timestamp: " << status.timestamp;
     std::lock_guard<std::mutex> lock(connection_mutex);
     if (send(socket_fd, &size, 4, MSG_NOSIGNAL) == 4) {
         if (send(socket_fd, packet.data(), packet.size(), MSG_NOSIGNAL) == static_cast<ssize_t>(packet.size())) {
@@ -825,7 +842,7 @@ void CommunicationServer::sendThread() {
         try { // <<< BẮT ĐẦU KHỐI TRY ĐỂ BẮT LỖI
             
             // Luồng ngủ một khoảng ngắn để tránh lãng phí CPU
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
             if (!is_connected) {
                 continue;

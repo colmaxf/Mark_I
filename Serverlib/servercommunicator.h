@@ -47,6 +47,12 @@ struct AGVStatusPacket {
     bool lidar_connected;                   ///< Trạng thái kết nối với LiDAR.
     bool battery_connected;                 ///< Trạng thái kết nối với hệ thống quản lý pin (BMS).
     float current_speed;                    ///< Tốc độ di chuyển hiện tại của AGV.
+    //bool imu_connected = false;
+    float current_heading;      // Hướng hiện tại (0-360°)
+    //float current_roll;         // Góc nghiêng trái/phải
+    //float current_pitch;        // Góc nghiêng lên/xuống
+    //bool imu_tilt_warning;     // Cảnh báo nghiêng nguy hiểm
+    //std::string last_imu_data = "Chưa có dữ liệu IMU";
     std::map<std::string, uint16_t> plc_registers; ///< Dữ liệu các thanh ghi đọc từ PLC.
     // std::vector<Point2D> stable_lidar_points;    // Dữ liệu chất lượng cao cho Mapping
     std::vector<Point2D> realtime_lidar_points;  // Dữ liệu liên tục cho Visualization
@@ -123,6 +129,7 @@ namespace BinaryProtocol {
         bool lidar_connected,
         bool battery_connected,
         float current_speed,
+        float current_heading,
         const std::map<std::string, uint16_t>& plc_registers,
         //const std::vector<Point2D>& stable_lidar_points,    // Dữ liệu ổn định cho Mapping
         const std::vector<Point2D>& realtime_lidar_points,  // Dữ liệu realtime cho Visualization

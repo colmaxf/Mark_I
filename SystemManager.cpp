@@ -94,7 +94,7 @@ bool SystemManager::initialize()
     comm_server_->setStatusCallback([this]() -> ServerComm::AGVStatusPacket
                                     {
         ServerComm::AGVStatusPacket status;
-        {
+        {  
             // Khóa state_mutex để đọc dữ liệu từ state_ một cách an toàn.
             std::lock_guard<std::mutex> lock(state_.state_mutex);
             // Điền các thông tin cơ bản vào gói tin trạng thái.
@@ -108,11 +108,11 @@ bool SystemManager::initialize()
             status.current_speed = static_cast<float>(state_.current_speed);
 
             // status.imu_connected = state_.imu_connected;
-            // status.current_heading = state_.current_heading;
-            // status.current_roll = state_.current_roll;
-            // status.current_pitch = state_.current_pitch;
+            status.current_heading = state_.current_heading;
+            //status.current_roll = state_.current_roll;
+            //status.current_pitch = state_.current_pitch;
         }
-
+        LOG_INFO << "[khaipv] current heading:" << state_.current_heading;
         {
             // Khóa plc_ptr_mutex_ để truy cập con trỏ PLC một cách an toàn.
             std::lock_guard<std::mutex> lock(plc_ptr_mutex_);
@@ -206,6 +206,7 @@ bool SystemManager::initialize()
                << ", lidar_connected=" << status.lidar_connected
                << ", battery_connected=" << status.battery_connected
                << ", current_speed=" << status.current_speed
+               << ", current_heading= " << status.current_heading
                << ", plc_registers={";
         for (const auto& reg : status.plc_registers) {
             log_ss << reg.first << ":" << reg.second << ",";
@@ -1415,7 +1416,7 @@ void SystemManager::imu_thread_func()
 
                     std::stringstream imu_log_ss;
                     imu_log_ss << std::fixed << std::setprecision(2)
-                               << "[IMU] Heading: " << heading << "° (" << compass_dir << ")"
+                               << "[IMU][khaipv] Heading: " << heading << "° (" << compass_dir << ")"
                                << " | Raw Yaw: " << raw_yaw << "°"
                                << " | Roll: " << roll << "°"
                                << " | Pitch: " << pitch << "°"
@@ -1556,7 +1557,7 @@ void SystemManager::applyHeadingCorrection()
     }
 
     // Nếu vẫn = 0 và không phải lùi, dừng
-    if (base_speed == 0 )//&& !is_reversing)
+    if (base_speed == 0 || !is_safe)//&& !is_reversing)
     {
         plc_command_queue_.push("WRITE_D104_0");
         plc_command_queue_.push("WRITE_D105_0");
@@ -1570,52 +1571,61 @@ void SystemManager::applyHeadingCorrection()
         direction = arc_direction_;
     }
 
-    // Nếu đang rẽ, kiểm tra xem đã đủ góc 90 độ chưa
-    if (target.is_turning) {
+    // Xử lý logic rẽ vòng cung (ưu tiên cao hơn giữ hướng)
+    if (target.is_turning)
+    {
         float angle_turned = fabs(calculateHeadingError(current_heading, target.turn_start_heading));
-        if (angle_turned >= 90.0f) {
+
+        // KIỂM TRA HOÀN THÀNH CÚ RẼ
+        if (angle_turned >= 90.0f)
+        {
             LOG_INFO << "[Heading Correction] 90-degree turn complete. Stopping.";
             plc_command_queue_.push("WRITE_D100_0"); // Gửi lệnh dừng
-            
-            // Reset trạng thái di chuyển
+
+            // Reset tất cả trạng thái liên quan đến rẽ KHI ĐÃ XONG
             {
                 std::lock_guard<std::mutex> lock(movement_target_mutex_);
                 current_movement_.is_active = false;
                 current_movement_.is_turning = false;
             }
             {
+                std::lock_guard<std::mutex> lock(arc_direction_mutex_);
+                arc_direction_ = ArcDirection::NONE;
+            }
+            {
                 std::lock_guard<std::mutex> lock(state_.state_mutex);
                 state_.movement_command_active = false;
                 state_.is_moving = false;
             }
-            return; // Dừng xử lý thêm
+            return; // Dừng xử lý thêm, không cần thực hiện logic bên dưới
         }
-    }
-    if (direction != ArcDirection::NONE)
-    {
 
-            // Reset arc sau khi xử lý
+        // NẾU CHƯA ĐỦ 90 ĐỘ, TIẾP TỤC RẼ
+        ArcDirection direction;
         {
             std::lock_guard<std::mutex> lock(arc_direction_mutex_);
-            arc_direction_ = ArcDirection::NONE;
+            direction = arc_direction_;
         }
 
-        int outer_speed = base_speed;
-        int inner_speed = base_speed / 2; // Bánh trong chạy bằng nửa tốc độ
+        if (direction != ArcDirection::NONE)
+        {
+            int outer_speed = 500;//base_speed;
+            int inner_speed = 250;//base_speed / 2;
 
-        if (direction == ArcDirection::LEFT)
-        {
-            LOG_INFO << "[LIDAR/ARC] Arc Left - BaseSpeed: " << base_speed << " -> L:" << outer_speed << ", R:" << inner_speed;
-            plc_command_queue_.push("WRITE_D104_" + std::to_string(outer_speed)); // Bánh trái (ngoài)
-            plc_command_queue_.push("WRITE_D105_" + std::to_string(inner_speed)); // Bánh phải (trong)
+            if (direction == ArcDirection::LEFT)
+            {
+                LOG_INFO << "[LIDAR/ARC] Arc Left - BaseSpeed: " << base_speed << " -> L:" << inner_speed << ", R:" << outer_speed;
+                // Sửa logic: Rẽ trái thì bánh trái (D105) chạy chậm, bánh phải (D104) chạy nhanh
+                plc_command_queue_.push("WRITE_D104_" + std::to_string(outer_speed)); 
+                plc_command_queue_.push("WRITE_D105_" + std::to_string(inner_speed)); 
+            } else { // ArcDirection::RIGHT
+                LOG_INFO << "[LIDAR/ARC] Arc Right - BaseSpeed: " << base_speed << " -> L:" << outer_speed << ", R:" << inner_speed;
+                // Rẽ phải thì bánh trái (D105) chạy nhanh, bánh phải (D104) chạy chậm
+                plc_command_queue_.push("WRITE_D104_" + std::to_string(inner_speed)); 
+                plc_command_queue_.push("WRITE_D105_" + std::to_string(outer_speed));
+            }
+            return; // Kết thúc sớm vì đang rẽ
         }
-        else // ArcDirection::RIGHT
-        {
-            LOG_INFO << "[LIDAR/ARC] Arc Right - BaseSpeed: " << base_speed << " -> L:" << inner_speed << ", R:" << outer_speed;
-            plc_command_queue_.push("WRITE_D104_" + std::to_string(inner_speed)); // Bánh trái (trong)
-            plc_command_queue_.push("WRITE_D105_" + std::to_string(outer_speed)); // Bánh phải (ngoài)
-        }
-        return; // Kết thúc sớm vì đang rẽ vòng cung
     }
 
     // Xử lý giữ hướng khi đi thẳng/lùi
@@ -1631,8 +1641,8 @@ void SystemManager::applyHeadingCorrection()
         float effective_error = target.is_forward ? heading_error : heading_error * 0.5f;
         calculateDifferentialSpeed(effective_error, base_speed, left_speed, right_speed);
 
-        plc_command_queue_.push("WRITE_D104_" + std::to_string(left_speed));
-        plc_command_queue_.push("WRITE_D105_" + std::to_string(right_speed));
+        plc_command_queue_.push("WRITE_D104_" + std::to_string(right_speed));
+        plc_command_queue_.push("WRITE_D105_" + std::to_string(left_speed));
     }
     else
     {

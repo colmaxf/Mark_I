@@ -55,7 +55,7 @@
 
 // Speed control
 #define SPEED_STEP 100
-#define ACCEL_TIME_MS 10000 // 10s
+#define ACCEL_TIME_MS 30000 // 3 0s
 #define MIN_START_SPEED 200
 
 #define TEST_KEYBOARD_MODE 1
