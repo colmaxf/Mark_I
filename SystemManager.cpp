@@ -163,6 +163,7 @@ bool SystemManager::initialize()
         if (realtime_points_queue_.pop(realtime_points)) {
             // Giới hạn số điểm realtime để không quá tải
             // const size_t MAX_REALTIME_POINTS = 1000;
+            LOG_INFO << "[SystemManager] [khaipv] realtime_points: " << realtime_points.size();
             status.realtime_lidar_points.clear();
 
             // Thay vì gửi đi trực tiếp, chúng ta gọi hàm sampling để giảm số lượng điểm
@@ -186,7 +187,7 @@ bool SystemManager::initialize()
                 // for (const auto& p : realtime_points) {
                 //     status.realtime_lidar_points.push_back({p.x, p.y});
                 // }
-                LOG_INFO << "[SystemManager] Sending " << status.realtime_lidar_points.size() 
+                LOG_INFO << "[SystemManager] [khaipv] Sending " << status.realtime_lidar_points.size() 
                          << " realtime points for mapping";
             // }
         }
@@ -683,7 +684,7 @@ void SystemManager::lidar_thread_func()
         // Callback xử lý dữ liệu thời gian thực để phát hiện vật cản và điều khiển tốc độ.
         lidar_processor->setRealtimeCallback([this](const std::vector<LidarPoint> &points)
                                              {
-                                                 LOG_INFO << "[LIDAR Thread] Processed frame. Points: " << points.size();
+                                                 LOG_INFO << "[LIDAR Thread][khaipv] Processed frame. Points: " << points.size();
                                                  {
                                                      // Đóng gói dữ liệu điểm để gửi đi
                                                      std::vector<ServerComm::Point2D> points_to_send;
@@ -694,6 +695,7 @@ void SystemManager::lidar_thread_func()
                                                      }
                                                      // Đẩy vào hàng đợi thời gian thực
                                                      realtime_points_queue_.push(std::move(points_to_send));
+                                                     LOG_INFO << "[LIDAR Thread] [khaipv] Realtime points pushed to queue. Size: " << points_to_send.size();
                                                  }
                                                  float min_front = 999.0f;
                                                  // Tìm khoảng cách nhỏ nhất trong vùng 90 độ phía trước.
@@ -1544,21 +1546,12 @@ void SystemManager::applyHeadingCorrection()
     //    (Lưu ý: Điều kiện an toàn không áp dụng khi lùi).
     if (base_speed == 0 || /*(target.is_forward && !is_safe)*/ check_pending)
     {
-        // LOG_INFO << "[khaipv] Stopping heading correction as base_speed=0 or unsafe to move forward.";
-        // plc_command_queue_.push("WRITE_D104_0");
-        // plc_command_queue_.push("WRITE_D105_0");
-        // LOG_INFO << "[LIDAR/Heading] Wheels stopped. Reason: base_speed=" << base_speed
-        //          << ", is_forward=" << target.is_forward << ", is_safe=" << is_safe;
             if (target.is_forward && is_safe)
         {
             base_speed = MIN_START_SPEED;
             LOG_INFO << "[LIDAR/Heading] Starting with pending, speed: " << base_speed;
         }
-        // else if (is_reversing)
-        // {
-        //     // base_speed = 500;
-        //     LOG_INFO << "[LIDAR/Heading] Reverse starting with pending";
-        // }
+
         return;
     }
 
