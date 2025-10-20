@@ -1017,10 +1017,10 @@ void SystemManager::command_handler_thread()
                     LOG_INFO << "[Command Handler] Arc turn started from " << start_heading << " degrees.";
                      // Gửi lệnh di chuyển tiến để AGV có thể bắt đầu rẽ
                 // Lệnh D101 chỉ có tác dụng khi D100=1
-                std::string cmd = (cmd.type == ServerComm::NavigationCommand::ROTATE_TO_LEFT) ? "WRITE_D101_1" : "WRITE_D101_2";
+                std::string cmd_send = (cmd.type == ServerComm::NavigationCommand::ROTATE_TO_LEFT) ? "WRITE_D101_1" : "WRITE_D101_2";
 
                 plc_command_queue_.push("WRITE_D100_1");
-                plc_command_queue_.push(cmd);
+                plc_command_queue_.push(cmd_send);
 
                 }
                 else
@@ -1554,11 +1554,11 @@ void SystemManager::applyHeadingCorrection()
             base_speed = MIN_START_SPEED;
             LOG_INFO << "[LIDAR/Heading] Starting with pending, speed: " << base_speed;
         }
-        else if (is_reversing)
-        {
-            base_speed = 500;
-            LOG_INFO << "[LIDAR/Heading] Reverse starting with pending";
-        }
+        // else if (is_reversing)
+        // {
+        //     // base_speed = 500;
+        //     LOG_INFO << "[LIDAR/Heading] Reverse starting with pending";
+        // }
         return;
     }
 
@@ -2014,7 +2014,7 @@ void SystemManager::keyboard_control_thread()
             {
                 std::lock_guard<std::mutex> lock(state_.state_mutex);
                 is_safe = state_.is_safe_to_move;
-                current_heading = state_.current_heading;
+                //current_heading = state_.current_heading;
                 state_.movement_command_active = true;
                 state_.is_moving = false;
                 state_.movement_pending = true; // Báo hiệu có lệnh di chuyển mới
@@ -2082,7 +2082,7 @@ void SystemManager::keyboard_control_thread()
             {
                 std::lock_guard<std::mutex> lock(state_.state_mutex);
                 is_safe = state_.is_safe_to_move;
-                current_heading = state_.current_heading;
+                //current_heading = state_.current_heading;
                 state_.movement_command_active = true;
                 state_.is_moving = false;
                 state_.movement_pending = true; // Báo hiệu có lệnh di chuyển mới
