@@ -386,14 +386,14 @@ double SystemManager::calculateSpeed(double distance)
  */
 int SystemManager::calculateSmoothSpeed(float distance_cm, bool movement_active)
 {
-    // Yêu cầu mới: Nếu đang lùi, luôn dùng tốc độ lùi cố định.
-    // Chúng ta sẽ dùng `calculateSmoothSpeed` để khởi động mượt mà đến tốc độ này.
-    bool is_reversing;
-    {
-        std::lock_guard<std::mutex> lock(movement_target_mutex_);
-        is_reversing = current_movement_.is_active && !current_movement_.is_forward;
-    }
-    int target_speed = is_reversing ? 200 : static_cast<int>(calculateSpeed(distance_cm));
+    // // Yêu cầu mới: Nếu đang lùi, luôn dùng tốc độ lùi cố định.
+    // // Chúng ta sẽ dùng `calculateSmoothSpeed` để khởi động mượt mà đến tốc độ này.
+    // bool is_reversing;
+    // {
+    //     std::lock_guard<std::mutex> lock(movement_target_mutex_);
+    //     is_reversing = current_movement_.is_active && !current_movement_.is_forward;
+    // }
+    int target_speed = /*is_reversing ? 200 :*/ static_cast<int>(calculateSpeed(distance_cm));
 
     // Nếu không có lệnh di chuyển và không có lệnh đang chờ, dừng AGV.
     if (!movement_active && !state_.movement_pending)
@@ -404,48 +404,47 @@ int SystemManager::calculateSmoothSpeed(float distance_cm, bool movement_active)
     }
 
     // Nếu AGV đang đứng yên và nhận lệnh di chuyển mới (hoặc có lệnh đang chờ)
+
     if ((!state_.is_moving && target_speed > 0) || state_.movement_pending)
-    {
+    { // Bắt đầu di chuyển
         LOG_INFO << "[Speed Control] Starting movement towards target speed: " << target_speed;
         state_.is_moving = true;
 
-        // Nếu có lệnh đang chờ, xử lý nó và reset cờ
         if (state_.movement_pending)
-        {
+        { // Có lệnh di chuyển đang chờ
             LOG_INFO << "[Speed Control] Acknowledged pending movement command.";
             state_.movement_pending = false;
         }
 
         state_.movement_start_time = std::chrono::steady_clock::now();
-        state_.current_speed = MIN_START_SPEED; // Bắt đầu với tốc độ tối thiểu để tránh giật.
+        state_.current_speed = MIN_START_SPEED;
     }
 
-    // Nếu AGV đang đứng yên, trả về tốc độ khởi động tối thiểu ngay lập tức
-    if (state_.current_speed == 0 && state_.is_moving) {
+    if (state_.current_speed == 0 && state_.is_moving) 
+    {// Trường hợp đặc biệt: từ đứng yên sang di chuyển
         state_.current_speed = MIN_START_SPEED;
         return state_.current_speed;
     }
 
-    // Nếu AGV đang di chuyển, thực hiện tăng/giảm tốc mượt mà
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - state_.movement_start_time)
                        .count();
 
-    // Giai đoạn tăng tốc: tăng tốc tuyến tính trong khoảng thời gian ACCEL_TIME_MS.
-    if (elapsed < ACCEL_TIME_MS) {
+    if (elapsed < ACCEL_TIME_MS) 
+    {// Gia tốc
         float t = static_cast<float>(elapsed) / ACCEL_TIME_MS;
         state_.current_speed = MIN_START_SPEED + static_cast<int>((target_speed - MIN_START_SPEED) * t);
-    } else {
-        // Sau giai đoạn tăng tốc, giữ tốc độ bằng tốc độ mục tiêu.
+    } else
+    {// Giảm tốc
         state_.current_speed = target_speed;
     }
 
-    // Nếu tốc độ mục tiêu giảm xuống dưới mức tối thiểu (và không có lệnh đang chờ), dừng AGV.
     if (target_speed < MIN_START_SPEED && !state_.movement_pending)
-    {
+    {// Nếu tốc độ mục tiêu quá thấp và không có lệnh chờ, dừng AGV.
         state_.is_moving = false;
         state_.current_speed = 0;
     }
+
 
     // Trả về tốc độ hiện tại đã được làm mượt.
     return state_.current_speed;
@@ -748,47 +747,34 @@ void SystemManager::lidar_thread_func()
 
                                                      // QUAN TRỌNG: Logic tính toán tốc độ mượt mà
                                                      if (movement_active || has_pending_movement)
-                                                     {
-                                                         if (is_reversing)
-                                                         {
-                                                             // Khi lùi, sử dụng tốc độ lùi cố định làm tốc độ mục tiêu
-                                                             //smooth_speed = calculateSmoothSpeed(999.0f, true); // 999.0f để đạt tốc độ lùi tối đa
-                                                             smooth_speed = 200;
-                                                             LOG_INFO << "[Lidar Thread] Reversing with speed: " << smooth_speed;
-                                                             if (has_pending_movement) 
-                                                             {
-                                                                 state_.movement_pending = false;
-                                                                 LOG_INFO << "[Lidar Thread] Acknowledged pending reverse movement command.";
-                                                             }
-                                                         }
-                                                         else if (is_safe)
-                                                         {
-                                                             // Khi tiến: Chỉ di chuyển nếu an toàn
-                                                             smooth_speed = calculateSmoothSpeed(min_dist_cm, true);
-                                                            // QUAN TRỌNG: Xử lý trường hợp pending movement với speed = 0
-                                                             if (smooth_speed == 0 && has_pending_movement)
-                                                             {
-                                                                 smooth_speed = MIN_START_SPEED; // 500
-                                                                 state_.movement_pending = false; // Clear pending flag
-                                                                 LOG_INFO << "[Lidar Thread] Starting forward with initial speed: " << smooth_speed;
-                                                             }
-                                                             else
-                                                             {
-                                                                 LOG_INFO << "[Lidar Thread] Moving forward with speed: " << smooth_speed;
-                                                             }
-                                                         }
-                                                         else
-                                                         {
-                                                             // Khi tiến nhưng không an toàn: Dừng
-                                                             smooth_speed = 0;
-                                                             LOG_WARNING << "[Lidar Thread] Forward blocked! Speed set to 0";
-                                                         }
-                                                     }
-                                                     else
-                                                     {
-                                                         // Không có lệnh di chuyển
-                                                         smooth_speed = calculateSmoothSpeed(min_dist_cm, false);
-                                                     }
+                                                    {
+                                                        if (is_safe)
+                                                        {
+                                                            // Luôn luôn là di chuyển tiến nếu an toàn
+                                                            smooth_speed = calculateSmoothSpeed(min_dist_cm, true);
+                                                            if (smooth_speed == 0 && has_pending_movement)
+                                                            {
+                                                                smooth_speed = MIN_START_SPEED;
+                                                                state_.movement_pending = false; 
+                                                                LOG_INFO << "[Lidar Thread] Starting forward with initial speed: " << smooth_speed;
+                                                            }
+                                                            else
+                                                            {
+                                                                LOG_INFO << "[Lidar Thread] Moving forward with speed: " << smooth_speed;
+                                                            }
+                                                        }
+                                                        else
+                                                        {
+                                                            // Khi tiến nhưng không an toàn: Dừng
+                                                            smooth_speed = 0;
+                                                            LOG_WARNING << "[Lidar Thread] Forward blocked! Speed set to 0";
+                                                        }
+                                                    }
+                                                    else
+                                                    {
+                                                        // Không có lệnh di chuyển
+                                                        smooth_speed = calculateSmoothSpeed(min_dist_cm, false);
+                                                    }
 
                                                      // Lưu smooth_speed vào state để heading correction dùng
                                                      state_.current_speed = smooth_speed;
@@ -961,69 +947,81 @@ void SystemManager::command_handler_thread()
                 break;
             }
 
-            case ServerComm::NavigationCommand::REVERSE_TO_POINT:
-            {
-                LOG_INFO << "[Command Handler] Processing REVERSE_TO_POINT command";
+            // case ServerComm::NavigationCommand::REVERSE_TO_POINT:
+            // {
+            //     LOG_INFO << "[Command Handler] Processing REVERSE_TO_POINT command";
 
-                // LƯU LẠI GÓC HIỆN TẠI
-                float current_heading;
-                {
-                    std::lock_guard<std::mutex> lock(state_.state_mutex);
-                    current_heading = state_.current_heading;
-                    state_.movement_command_active = true;
-                    state_.is_moving = false;
-                }
+            //     // LƯU LẠI GÓC HIỆN TẠI
+            //     float current_heading;
+            //     {
+            //         std::lock_guard<std::mutex> lock(state_.state_mutex);
+            //         current_heading = state_.current_heading;
+            //         state_.movement_command_active = true;
+            //         state_.is_moving = false;
+            //     }
 
-                // Cập nhật movement target
-                {
-                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
-                    current_movement_.is_active = true;
-                    current_movement_.target_heading = current_heading;
-                    current_movement_.heading_tolerance = 3.0f; // ±3° (rộng hơn khi lùi)
-                    current_movement_.is_forward = false;
-                    current_movement_.start_time = std::chrono::steady_clock::now();
+            //     // Cập nhật movement target
+            //     {
+            //         std::lock_guard<std::mutex> lock(movement_target_mutex_);
+            //         current_movement_.is_active = true;
+            //         current_movement_.target_heading = current_heading;
+            //         current_movement_.heading_tolerance = 3.0f; // ±3° (rộng hơn khi lùi)
+            //         current_movement_.is_forward = false;
+            //         current_movement_.start_time = std::chrono::steady_clock::now();
 
-                    heading_pid_.reset();
-                }
+            //         heading_pid_.reset();
+            //     }
 
-                LOG_INFO << "[Command Handler] Reverse target heading locked at: "
-                         << current_heading << "°";
+            //     LOG_INFO << "[Command Handler] Reverse target heading locked at: "
+            //              << current_heading << "°";
 
-                {
-                    std::lock_guard<std::mutex> lock(last_command_mutex_);
-                    last_movement_command_ = "WRITE_D100_2";
-                }
+            //     {
+            //         std::lock_guard<std::mutex> lock(last_command_mutex_);
+            //         last_movement_command_ = "WRITE_D100_2";
+            //     }
 
-                plc_command_queue_.push("WRITE_D101_0");
-                plc_command_queue_.push("WRITE_D100_2"); // Lùi
-                break;
-            }
+            //     plc_command_queue_.push("WRITE_D101_0");
+            //     plc_command_queue_.push("WRITE_D100_2"); // Lùi
+            //     break;
+            // }
 
             case ServerComm::NavigationCommand::ROTATE_TO_LEFT:
             case ServerComm::NavigationCommand::ROTATE_TO_RIGHT:
             {
-                LOG_INFO << "[Command Handler] Processing arc rotation command";
-
-                // Tắt heading correction vì chúng ta chủ động muốn thay đổi hướng
-                {
-                    std::lock_guard<std::mutex> lock(movement_target_mutex_);
-                    current_movement_.is_active = false;
-                }
-
-                // Đặt trạng thái rẽ vòng cung
-                {
-                    std::lock_guard<std::mutex> lock(arc_direction_mutex_);
-                    arc_direction_ = (cmd.type == ServerComm::NavigationCommand::ROTATE_TO_LEFT) ? ArcDirection::LEFT : ArcDirection::RIGHT;
-                }
-
+                LOG_INFO << "[Command Handler] Processing 90-degree arc rotation";
                 if (is_safe)
                 {
+                    float start_heading;
                     {
                         std::lock_guard<std::mutex> lock(state_.state_mutex);
+                        start_heading = state_.current_heading;
                         state_.movement_command_active = true;
-                        state_.is_moving = true; // Bắt đầu di chuyển ngay
+                        state_.is_moving = false; // Chờ gia tốc
                         state_.movement_pending = true;
                     }
+
+                    // ~~~ SỬA: Cập nhật movement target cho việc rẽ ~~~
+                    {
+                        std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                        current_movement_.is_active = true;
+                        current_movement_.is_turning = true; // Đánh dấu đang rẽ
+                        current_movement_.turn_start_heading = start_heading; // Lưu góc bắt đầu
+                        current_movement_.start_time = std::chrono::steady_clock::now();
+                    }
+
+                    {
+                        std::lock_guard<std::mutex> lock(arc_direction_mutex_);
+                        arc_direction_ = (cmd.type == ServerComm::NavigationCommand::ROTATE_TO_LEFT) ? ArcDirection::LEFT : ArcDirection::RIGHT;
+                    }
+
+                    LOG_INFO << "[Command Handler] Arc turn started from " << start_heading << " degrees.";
+                     // Gửi lệnh di chuyển tiến để AGV có thể bắt đầu rẽ
+                // Lệnh D101 chỉ có tác dụng khi D100=1
+                std::string cmd = (cmd.type == ServerComm::NavigationCommand::ROTATE_TO_LEFT) ? "WRITE_D101_1" : "WRITE_D101_2";
+
+                plc_command_queue_.push("WRITE_D100_1");
+                plc_command_queue_.push(cmd);
+
                 }
                 else
                 {
@@ -1565,7 +1563,7 @@ void SystemManager::applyHeadingCorrection()
     }
 
     // Nếu vẫn = 0 và không phải lùi, dừng
-    if (base_speed == 0 && !is_reversing)
+    if (base_speed == 0 )//&& !is_reversing)
     {
         plc_command_queue_.push("WRITE_D104_0");
         plc_command_queue_.push("WRITE_D105_0");
@@ -1583,7 +1581,21 @@ void SystemManager::applyHeadingCorrection()
     if (target.is_turning) {
         float angle_turned = fabs(calculateHeadingError(current_heading, target.turn_start_heading));
         if (angle_turned >= 90.0f) {
+            LOG_INFO << "[Heading Correction] 90-degree turn complete. Stopping.";
             plc_command_queue_.push("WRITE_D100_0"); // Gửi lệnh dừng
+            
+            // Reset trạng thái di chuyển
+            {
+                std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                current_movement_.is_active = false;
+                current_movement_.is_turning = false;
+            }
+            {
+                std::lock_guard<std::mutex> lock(state_.state_mutex);
+                state_.movement_command_active = false;
+                state_.is_moving = false;
+            }
+            return; // Dừng xử lý thêm
         }
     }
     if (direction != ArcDirection::NONE)

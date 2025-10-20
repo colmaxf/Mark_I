@@ -32,7 +32,7 @@
 //----------------------Server--------------------------------//
 #define SERVER_IP "100.93.107.30"  // IP của server
 #define SERVER_PORT 5000           // Port của server
-#define COMM_SEND_INTERVAL_MS 50 // Gửi status mỗi 200ms
+#define COMM_SEND_INTERVAL_MS 33 //50 // Gửi status mỗi 200ms
 //----------------------------------------------------//
 //===================== Cấu hình hệ thống ==================---//
 
