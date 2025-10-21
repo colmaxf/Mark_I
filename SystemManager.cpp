@@ -614,15 +614,16 @@ void SystemManager::lidar_thread_func()
     pin_thread_to_core(1);
     LOG_INFO << "[LiDAR Thread] Starting...";
 
+    std::unique_ptr<LidarProcessor> lidar_processor;
+
     // Vòng lặp chính để quản lý kết nối và xử lý dữ liệu LiDAR.
     // Nếu kết nối bị mất, thử khởi động lại.
     while (running_)
     {
-        auto lidar_processor = std::make_unique<LidarProcessor>();
+        lidar_processor = std::make_unique<LidarProcessor>();
         // Thử khởi tạo với retry
         int init_attempts = 0;
         bool initialized = false;
-
         // Vòng lặp khởi tạo với tối đa 3 lần thử.
         // Nếu thất bại, đợi 10 giây rồi thử lại từ đầu.
         // Cập nhật trạng thái kết nối LiDAR trong state_.
@@ -801,7 +802,7 @@ void SystemManager::lidar_thread_func()
         // });
 
         // Monitor loop - kiểm tra health định kỳ
-        while (running_ && lidar_processor->isConnectionHealthy())
+        while (running_ && lidar_processor && lidar_processor->isConnectionHealthy())
         {
             std::this_thread::sleep_for(std::chrono::seconds(1));
 
@@ -814,7 +815,10 @@ void SystemManager::lidar_thread_func()
 
         // Nếu tới đây nghĩa là mất kết nối
         LOG_WARNING << "[LiDAR Thread] LiDAR connection lost. Will restart processor...";
-        lidar_processor->stop();
+        if (lidar_processor)
+        {
+            lidar_processor->stop();
+        }
 
         {
             std::lock_guard<std::mutex> lock(state_.state_mutex);
