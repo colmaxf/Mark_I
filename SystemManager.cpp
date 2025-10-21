@@ -687,7 +687,7 @@ void SystemManager::lidar_thread_func()
 
                                                  // Nếu không có điểm nào ở phía trước, bỏ qua.
                                                  if (min_front >= 999.0f)
-                                                     return;
+                                                     LOG_WARNING << "[LIDAR Callback] NO POINTS IN FRONT ZONE! Skipping safety update.";
                                                  float min_dist_cm = min_front * 100.0f; // Chuyển từ mét sang cm
                                                  int smooth_speed = 0;
                                                  bool movement_active = false;
@@ -712,7 +712,7 @@ void SystemManager::lidar_thread_func()
                                                          is_reversing = current_movement_.is_active && !current_movement_.is_forward;
                                                      }
 
-                                                     LOG_INFO << "[Lidar Thread] is_reversing: " << (is_reversing ? "Yes" : "No")
+                                                     LOG_INFO << "[Lidar Thread] is_reversing: "// << (is_reversing ? "Yes" : "No")
                                                               << ", is_safe: " << (is_safe ? "Yes" : "No")
                                                               << ", movement_active: " << (movement_active ? "Yes" : "No");
 
