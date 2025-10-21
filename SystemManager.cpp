@@ -1140,7 +1140,7 @@ void SystemManager::safety_monitor_thread()
 /**
  * @brief Luồng gửi các tác vụ định kỳ đến PLC.
  * @details
- * - Ghim luồng vào CPU core 1.
+ * - Ghim luồng vào CPU core1.
  * - Gửi lệnh `WRITE_D200_1` (heartbeat) đến PLC mỗi 500ms.
  * - Đọc các thanh ghi quan trọng từ PLC và cập nhật vào `state_` để các luồng khác sử dụng.
  */
@@ -1554,30 +1554,21 @@ void SystemManager::applyHeadingCorrection()
         return;
     }
 
-    // QUAN TRỌNG: Kiểm tra pending trước khi check base_speed
-    bool check_pending = false;
+    // Nếu không an toàn, dừng ngay lập tức và không làm gì thêm.
+    // Điều kiện này áp dụng cho cả đi tiến và rẽ.
+    if (!is_safe)
     {
-        std::lock_guard<std::mutex> lock(state_.state_mutex);
-        check_pending = state_.movement_pending;
-    }
-
-    // Điều kiện dừng bánh xe:
-    // 1. Tốc độ cơ bản = 0 (đã dừng hoặc đang giảm tốc về 0).
-    // 2. HOẶC đang di chuyển tiến VÀ không an toàn.
-    //    (Lưu ý: Điều kiện an toàn không áp dụng khi lùi).
-    if (base_speed == 0 || /*(target.is_forward && !is_safe)*/ check_pending)
-    {
-            if (target.is_forward && is_safe)
-        {
-            base_speed = MIN_START_SPEED;
-            LOG_INFO << "[LIDAR/Heading] Starting with pending, speed: " << base_speed;
+        // Chỉ gửi lệnh dừng nếu AGV đang thực sự di chuyển
+        if (base_speed > 0) {
+            LOG_WARNING << "[Heading Correction] Unsafe state detected. Stopping wheels.";
+            plc_command_queue_.push("WRITE_D104_0"); // Right wheel stop
+            plc_command_queue_.push("WRITE_D105_0"); // Left wheel stop
         }
-
         return;
     }
 
-    // Nếu vẫn = 0 và không phải lùi, dừng
-    if (base_speed == 0 || !is_safe)//&& !is_reversing)
+    // Nếu tốc độ cơ sở là 0 (đã dừng hoặc lệnh dừng), gửi lệnh dừng và thoát.
+    if (base_speed == 0)
     {
         plc_command_queue_.push("WRITE_D104_0");
         plc_command_queue_.push("WRITE_D105_0");

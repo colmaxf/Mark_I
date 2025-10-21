@@ -71,11 +71,11 @@ struct NavigationCommand {
     enum Type { 
         STOP,               ///< Dừng AGV ngay lập tức.
         MOVE_TO_POINT,      ///< Di chuyển tiến.
-        REVERSE_TO_POINT,   ///< Di chuyển lùi.
+        //REVERSE_TO_POINT,   ///< Di chuyển lùi.
         ROTATE_TO_LEFT,     ///< Quay trái.
         ROTATE_TO_RIGHT,    ///< Quay phải.
-        ROTATE_180_LEFT,     ///< Quay trái 90 độ.
-        ROTATE_180_RIGHT,    ///< Quay phải 90 độ.
+        //ROTATE_180_LEFT,     ///< Quay trái 90 độ.
+        //ROTATE_180_RIGHT,    ///< Quay phải 90 độ.
         EMERGENCY_STOP      ///< Lệnh dừng khẩn cấp, có độ ưu tiên cao nhất.
     };
     Type type;            ///< Loại lệnh điều hướng.
