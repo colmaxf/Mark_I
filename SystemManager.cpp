@@ -797,7 +797,15 @@ void SystemManager::lidar_thread_func()
                                                  // =================================================================
                                                  // LOGIC HEADING CORRECTION ĐƯỢC TÍCH HỢP VÀO ĐÂY
                                                  // =================================================================
-                                                 applyHeadingCorrection();
+                                                 if (is_safe)
+                                                 {
+                                                    applyHeadingCorrection();
+                                                 } 
+                                                 else 
+                                                 {
+                                                    plc_command_queue_.push("WRITE_D104_0"); // Right wheel stop
+                                                    plc_command_queue_.push("WRITE_D105_0"); // Left wheel stop
+                                                 } 
                                              });
 
         // // Callback xử lý dữ liệu ổn định để gửi lên server.
@@ -912,41 +920,53 @@ void SystemManager::command_handler_thread()
                     float current_heading;
                     {
                         std::lock_guard<std::mutex> lock(state_.state_mutex);
+                        is_safe = state_.is_safe_to_move;
                         current_heading = state_.current_heading;
                         state_.movement_command_active = true;
                         state_.is_moving = false;
+                        state_.movement_pending = true; // Báo hiệu có lệnh di chuyển mới
                     }
-
-                    // Cập nhật movement target
+                
+                    // Yêu cầu mới: Giữ lệnh nếu không an toàn
+                    if (!is_safe)
                     {
-                        std::lock_guard<std::mutex> lock(movement_target_mutex_);
-                        current_movement_.is_active = true;
-                        current_movement_.target_heading = current_heading;
-                        current_movement_.heading_tolerance = 2.0f; // ±2°
-                        current_movement_.is_forward = true;
-                        current_movement_.start_time = std::chrono::steady_clock::now();
-
-                        // Reset PID controller
-                        heading_pid_.reset();
+                        LOG_WARNING << "[Command Handler] Path blocked. Command 'FORWARD' is pending.";
+                        // Lệnh đã được lưu trong state_, luồng safety_monitor sẽ kích hoạt lại sau.
+                        continue;
                     }
-
-                    LOG_INFO << "[Command Handler] Target heading locked at: "
-                             << current_heading << "°";
-
-                    // Lưu lại lệnh
+                
+                     {
+                        std::lock_guard<std::mutex> lock(arc_direction_mutex_);
+                        arc_direction_ = ArcDirection::NONE; // Tắt chế độ rẽ vòng cung khi tiến
+                    }
+                
+                    if (is_safe)
                     {
-                        std::lock_guard<std::mutex> lock(last_command_mutex_);
-                        last_movement_command_ = "WRITE_D100_1";
+                        {
+                            std::lock_guard<std::mutex> lock(last_command_mutex_);
+                            last_movement_command_ = "WRITE_D100_1";
+                        }
+                    
+                        plc_command_queue_.push("WRITE_D101_0");
+                        plc_command_queue_.push("WRITE_D100_1");
+                    
+                        // Lưu heading target
+                        {
+                            std::lock_guard<std::mutex> lock(movement_target_mutex_);
+                            current_movement_.is_active = true;
+                            current_movement_.target_heading = current_heading;
+                            current_movement_.heading_tolerance = 2.0f;
+                            current_movement_.is_forward = true;
+                            current_movement_.is_turning = false; // Không phải đang rẽ
+                            current_movement_.start_time = std::chrono::steady_clock::now();
+                            heading_pid_.reset();
+                        }
+                        LOG_INFO << "[Command Handler] Target heading locked: " << current_heading << "°";
                     }
-
-                    // Gửi lệnh di chuyển
-                    plc_command_queue_.push("WRITE_D101_0"); // Hướng: thẳng
-                    plc_command_queue_.push("WRITE_D100_1"); // Bắt đầu di chuyển
-                }
-                else
-                {
-                    LOG_WARNING << "[Command Handler] Cannot execute - obstacle detected!";
-                }
+                    else
+                    {
+                        LOG_WARNING << "[Command Handler] Không an toàn! Có vật cản phía trước.";
+                    }
                 break;
             }
 

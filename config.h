@@ -51,7 +51,7 @@
 // Khoảng cách cảnh báo (cm)
 #define WARNING_DISTANCE_CM 100.0f
 // Khoảng cách dừng khẩn cấp (cm)
-#define EMERGENCY_STOP_DISTANCE_CM 50.0f
+#define EMERGENCY_STOP_DISTANCE_CM 70.0f
 
 // Speed control
 #define SPEED_STEP 100
