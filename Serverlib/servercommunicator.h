@@ -69,7 +69,7 @@ struct NavigationCommand {
      * @brief Liệt kê các loại lệnh điều hướng có thể có.
      */
     enum Type { 
-        STOP,               ///< Dừng AGV ngay lập tức.
+        STOP = 0,               ///< Dừng AGV ngay lập tức.
         MOVE_TO_POINT,      ///< Di chuyển tiến.
         //REVERSE_TO_POINT,   ///< Di chuyển lùi.
         ROTATE_TO_LEFT,     ///< Quay trái.

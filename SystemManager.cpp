@@ -1062,7 +1062,7 @@ void SystemManager::command_handler_thread()
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-
+    }
     LOG_INFO << "[Command Handler] Thread stopped.";
 }
 
