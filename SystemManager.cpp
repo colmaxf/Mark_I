@@ -108,6 +108,9 @@ bool SystemManager::initialize()
             status.current_speed = static_cast<float>(state_.current_speed);
 
             // status.imu_connected = state_.imu_connected;
+            // Lấy các thanh ghi PLC đã được cache trong state_
+            // Điều này tránh việc gọi PLC trực tiếp từ callback, ngăn ngừa deadlock.
+            status.plc_registers = state_.plc_registers;
             status.current_heading = state_.current_heading;
             //status.current_roll = state_.current_roll;
             //status.current_pitch = state_.current_pitch;
@@ -115,34 +118,6 @@ bool SystemManager::initialize()
         LOG_INFO << "[khaipv] current heading:" << state_.current_heading;
         {
             // Khóa plc_ptr_mutex_ để truy cập con trỏ PLC một cách an toàn.
-            std::lock_guard<std::mutex> lock(plc_ptr_mutex_);
-            if (plc_ptr_ && plc_ptr_->isConnected()) {
-                try {
-                    // Đọc nhiều thanh ghi PLC cùng lúc để tăng hiệu quả giao tiếp.
-                    // Đọc một khối từ D100 đến D200 (101 thanh ghi).
-                    // auto regs = plc_ptr_->readWords("D", 100, 101); // Read D100 to D200
-                    //// // Kiểm tra xem có đọc đủ số lượng thanh ghi không trước khi truy cập.
-                    // if (regs.size() >= 101) {
-                    //     status.plc_registers["D100"] = regs[0];
-                    //     status.plc_registers["D101"] = regs[1];
-                    //     status.plc_registers["D102"] = regs[2];
-                    //     status.plc_registers["D103"] = regs[3];
-                    //     status.plc_registers["D110"] = regs[10];
-                    //     status.plc_registers["D200"] = regs[100];
-                    // }
-                    //--------Đọc từng thanh ghi riêng lẻ (không hiệu quả)--------
-                    status.plc_registers["D100"] = plc_ptr_->readSingleWord("D", 100);
-                    status.plc_registers["D101"] = plc_ptr_->readSingleWord("D", 101);
-                    status.plc_registers["D102"] = plc_ptr_->readSingleWord("D", 102);
-                    status.plc_registers["D103"] = plc_ptr_->readSingleWord("D", 103);
-                    status.plc_registers["D110"] = plc_ptr_->readSingleWord("D", 110);
-                    status.plc_registers["D200"] = plc_ptr_->readSingleWord("D", 200);
-                    //-------------------------------------------------------------
-
-                } catch (const std::exception& e) {
-                    LOG_ERROR << "[SystemManager] Failed to read PLC registers: " << e.what();
-                }
-            }
         }
 
         // Lấy dữ liệu điểm LiDAR ổn định từ hàng đợi (nếu có).
@@ -1166,17 +1141,42 @@ void SystemManager::safety_monitor_thread()
  * @brief Luồng gửi các tác vụ định kỳ đến PLC.
  * @details
  * - Ghim luồng vào CPU core 1.
- * - Gửi lệnh `WRITE_D200_1` đến PLC mỗi 500ms. Lệnh này có thể được dùng như một tín hiệu "heartbeat" để PLC biết rằng phần mềm vẫn đang hoạt động.
+ * - Gửi lệnh `WRITE_D200_1` (heartbeat) đến PLC mỗi 500ms.
+ * - Đọc các thanh ghi quan trọng từ PLC và cập nhật vào `state_` để các luồng khác sử dụng.
  */
 void SystemManager::plc_periodic_tasks_thread()
 {
     pin_thread_to_core(1);
     LOG_INFO << "[PLC Periodic] Thread started.";
-    std::this_thread::sleep_for(std::chrono::seconds(5));
 
     while (running_)
     {
-        plc_command_queue_.push("WRITE_D200_1");
+        // Khóa mutex để truy cập con trỏ PLC an toàn
+        std::lock_guard<std::mutex> lock(plc_ptr_mutex_);
+
+        if (plc_ptr_ && plc_ptr_->isConnected()) {
+            try {
+                // 1. Gửi heartbeat đến PLC
+                plc_ptr_->writeSingleWord("D", 200, 1);
+
+                // 2. Đọc các thanh ghi quan trọng và cache vào state_
+                // Sử dụng đọc khối để hiệu quả hơn
+                auto regs = plc_ptr_->readWords("D", 100, 11); // Đọc từ D100 đến D110
+
+                if (regs.size() >= 11) {
+                    std::lock_guard<std::mutex> state_lock(state_.state_mutex);
+                    state_.plc_registers["D100"] = regs[0];  // Trạng thái di chuyển
+                    state_.plc_registers["D101"] = regs[1];  // Lệnh rẽ
+                    state_.plc_registers["D102"] = regs[2];  // Trạng thái lỗi
+                    state_.plc_registers["D103"] = regs[3];  // Trạng thái an toàn
+                    state_.plc_registers["D110"] = regs[10]; // Phản hồi từ PLC
+                }
+            } catch (const std::exception& e) {
+                LOG_ERROR << "[PLC Periodic] Failed to perform periodic tasks: " << e.what();
+                // Trạng thái plc_connected sẽ được cập nhật bởi plc_thread_func
+            }
+        }
+
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
     LOG_INFO << "[PLC Periodic] Thread stopped.";

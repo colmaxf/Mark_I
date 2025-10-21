@@ -610,6 +610,13 @@ bool CommunicationServer::connect() {
         connection_callback(true);
     }
     
+    // QUAN TRỌNG: Reset lại các mốc thời gian sau khi kết nối lại thành công.
+    // Điều này đảm bảo luồng gửi và kiểm tra heartbeat hoạt động ngay lập tức
+    // thay vì phải chờ hết khoảng thời gian cũ.
+    auto now = std::chrono::steady_clock::now();
+    last_send_time = now;
+    last_heartbeat_ack_time = now;
+    
     LOG_INFO << "[CommServer] Connected successfully";
     return true;
 }
