@@ -1351,6 +1351,11 @@ void SystemManager::imu_thread_func()
         LOG_INFO << "[IMU Thread] Calibrating gyroscope...";
         imu_ptr_->calibrateGyro(2000);
 
+        // Hiệu chuẩn gia tốc kế
+        // Yêu cầu: AGV phải được đặt trên mặt phẳng khi hiệu chuẩn
+        LOG_INFO << "[IMU Thread] Calibrating accelerometer...";
+        imu_ptr_->calibrateAccel(2000);
+
         // Cấu hình tham số an toàn
         imu_ptr_->setMaxTiltAngle(30.0f);      // 30° max tilt
         imu_ptr_->setCollisionThreshold(3.0f); // 3g collision threshold
@@ -1385,6 +1390,22 @@ void SystemManager::imu_thread_func()
                 imu_ptr_->getRawGyro(gx, gy, gz);
                 imu_ptr_->getRawMag(mx, my, mz);
                 float temp = imu_ptr_->getTemperature();
+
+                // Ví dụ trong một luồng nào đó của SystemManager
+                float vx, vy, px, py;
+
+                // Lấy vận tốc
+                imu_ptr_->getVelocity(vx, vy);
+                float speed_magnitude = sqrt(vx*vx + vy*vy); // Tính độ lớn vận tốc (m/s)
+                LOG_INFO << "Velocity: X=" << vx << " m/s, Y=" << vy << " m/s, Speed=" << speed_magnitude << " m/s";
+
+                // Lấy vị trí
+                imu_ptr_->getPosition(px, py);
+                LOG_INFO << "Position: X=" << px << " m, Y=" << py << " m";
+
+                // Reset vị trí về (0,0)
+                imu_ptr_->resetPosition();
+
 
                 // Safety checks
                 bool is_safe = imu_ptr_->isSafe();
@@ -1430,7 +1451,9 @@ void SystemManager::imu_thread_func()
                                                      std::chrono::system_clock::now().time_since_epoch())
                                                      .count();
                 }
-
+                
+                imu_ptr_->resetPosition();
+                
                 // Log periodically (mỗi giây)
                 static int log_counter = 0;
                 if (++log_counter >= 50)

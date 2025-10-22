@@ -336,7 +336,9 @@ float MadgwickFilter::getBeta() const {
 AGVNavigation::AGVNavigation() 
     : i2c_fd(-1), madgwick(100.0f, 0.08f),
       heading(0), roll(0), pitch(0),
-      pos_x(0), pos_y(0), velocity(0),
+      pos_x(0), pos_y(0), 
+      velocity_x(0), velocity_y(0),
+      last_update_time(0),
       raw_ax(0), raw_ay(0), raw_az(0),
       raw_gx(0), raw_gy(0), raw_gz(0),
       raw_mx(0), raw_my(0), raw_mz(0),
@@ -541,6 +543,17 @@ void AGVNavigation::update() {
     raw_mx = mx; raw_my = my; raw_mz = mz;
     
     std::lock_guard<std::mutex> lock(data_mutex);
+
+    // Tính toán delta time (dt)
+    unsigned long current_time = getTimestamp();
+    float dt = 0.0f;
+    if (last_update_time > 0) {
+        dt = (current_time - last_update_time) / 1000000.0f; // Chuyển từ us sang s
+    }
+    last_update_time = current_time;
+
+    // Cập nhật Dead Reckoning (tính vận tốc và vị trí)
+    updateDeadReckoning(ax, ay, az, dt);
     
     // Update Madgwick filter
     if(mag_ok) {
@@ -839,4 +852,69 @@ void AGVNavigation::readBytes(uint8_t reg, uint8_t *buffer, int length) {
     if(read(i2c_fd, buffer, length) != length) {
         LOG_WARNING << "[MPU9250] Error reading multiple bytes from I2C" ;
     }
+}
+
+/**
+ * @brief Cập nhật vận tốc và vị trí bằng phương pháp Dead Reckoning.
+ * @param ax Gia tốc đã hiệu chỉnh trên trục X của cảm biến (g).
+ * @param ay Gia tốc đã hiệu chỉnh trên trục Y của cảm biến (g).
+ * @param az Gia tốc đã hiệu chỉnh trên trục Z của cảm biến (g).
+ * @param dt Khoảng thời gian từ lần cập nhật cuối (giây).
+ */
+void AGVNavigation::updateDeadReckoning(float ax, float ay, float az, float dt) {
+    if (dt <= 0) return;
+
+    // Lấy quaternion định hướng hiện tại từ bộ lọc Madgwick
+    float q0, q1, q2, q3;
+    madgwick.getQuaternion(q0, q1, q2, q3);
+
+    // 1. Ước tính vector trọng lực trong hệ tọa độ của cảm biến
+    // Vector trọng lực trong hệ tọa độ thế giới là (0, 0, 1)
+    // Xoay nó về hệ tọa độ cảm biến bằng quaternion nghịch đảo.
+    float gravity_x = 2 * (q1 * q3 - q0 * q2);
+    float gravity_y = 2 * (q0 * q1 + q2 * q3);
+    float gravity_z = q0 * q0 - q1 * q1 - q2 * q2 + q3 * q3;
+
+    // 2. Loại bỏ trọng lực để có gia tốc tuyến tính trong hệ tọa độ cảm biến
+    float linear_ax = ax - gravity_x;
+    float linear_ay = ay - gravity_y;
+    float linear_az = az - gravity_z;
+
+    // Chuyển đổi gia tốc từ g sang m/s^2
+    const float G = 9.80665f;
+    linear_ax *= G;
+    linear_ay *= G;
+    linear_az *= G;
+
+    // 3. Xoay vector gia tốc tuyến tính từ hệ tọa độ cảm biến sang hệ tọa độ thế giới
+    // Sử dụng ma trận xoay từ quaternion
+    float world_ax = (1 - 2*q2*q2 - 2*q3*q3) * linear_ax + 2*(q1*q2 - q0*q3) * linear_ay + 2*(q1*q3 + q0*q2) * linear_az;
+    float world_ay = 2*(q1*q2 + q0*q3) * linear_ax + (1 - 2*q1*q1 - 2*q3*q3) * linear_ay + 2*(q2*q3 - q0*q1) * linear_az;
+    // float world_az = 2*(q1*q3 - q0*q2) * linear_ax + 2*(q2*q3 + q0*q1) * linear_ay + (1 - 2*q1*q1 - 2*q2*q2) * linear_az;
+
+    // Áp dụng một ngưỡng nhỏ để loại bỏ nhiễu khi đứng yên
+    if (fabs(world_ax) < 0.05f) world_ax = 0.0f;
+    if (fabs(world_ay) < 0.05f) world_ay = 0.0f;
+
+    // 4. Tích phân gia tốc để cập nhật vận tốc
+    velocity_x += world_ax * dt;
+    velocity_y += world_ay * dt;
+
+    // 5. Tích phân vận tốc để cập nhật vị trí
+    pos_x += velocity_x * dt;
+    pos_y += velocity_y * dt;
+}
+
+/** @brief Lấy vận tốc ước tính hiện tại. */
+void AGVNavigation::getVelocity(float &vx, float &vy) {
+    std::lock_guard<std::mutex> lock(data_mutex);
+    vx = velocity_x;
+    vy = velocity_y;
+}
+
+/** @brief Lấy vị trí ước tính hiện tại. */
+void AGVNavigation::getPosition(float &px, float &py) {
+    std::lock_guard<std::mutex> lock(data_mutex);
+    px = pos_x;
+    py = pos_y;
 }

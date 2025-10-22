@@ -157,8 +157,11 @@ private:
     float roll;     ///< Góc cuộn (roll) đã tổng hợp theo độ.
     float pitch;    ///< Góc nghiêng (pitch) đã tổng hợp theo độ.
     float pos_x;    ///< Vị trí X ước tính qua dead reckoning.
-    float pos_y;    ///< Vị trí Y ước tính qua dead reckoning.
-    float velocity; ///< Vận tốc hiện tại ước tính.
+    float pos_y;    ///< Vị trí Y ước tính qua dead reckoning (m).
+    float velocity_x; ///< Vận tốc X ước tính trong hệ tọa độ thế giới (m/s).
+    float velocity_y; ///< Vận tốc Y ước tính trong hệ tọa độ thế giới (m/s).
+    
+    unsigned long last_update_time; ///< Dấu thời gian của lần cập nhật cuối cùng (us).
 
     // Raw Sensor Data
     float raw_ax, raw_ay, raw_az; ///< Dữ liệu thô của gia tốc kế (g).
@@ -175,6 +178,7 @@ private:
     void readGyro(float &gx, float &gy, float &gz);
     bool readMag(float &mx, float &my, float &mz);
     float readTemp();
+    void updateDeadReckoning(float ax, float ay, float az, float dt);
 
     void checkTiltSafety();
     void detectCollision(float ax, float ay, float az);
@@ -232,6 +236,10 @@ public:
     /** @brief Lấy góc nghiêng hiện tại (pitch). */
     float getPitch();
 
+    /** @brief Lấy vận tốc ước tính hiện tại. */
+    void getVelocity(float &vx, float &vy);
+    /** @brief Lấy vị trí ước tính hiện tại. */
+    void getPosition(float &px, float &py);
     /** @brief Lấy dữ liệu thô mới nhất từ gia tốc kế. */
     void getRawAccel(float &ax, float &ay, float &az);
     /** @brief Lấy dữ liệu thô mới nhất từ con quay hồi chuyển. */
