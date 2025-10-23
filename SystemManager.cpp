@@ -1213,7 +1213,8 @@ void SystemManager::battery_thread_func()
                 BatteryData data = bms.getBatteryData();
                 std::lock_guard<std::mutex> lock(state_.state_mutex);
                 state_.battery_connected = true;
-                state_.battery_level = data.stateOfCharge;
+                state_.battery_level = data.getStateOfCharge();
+                LOG_INFO << "[Battery Thread] BMS data updated. SOC: " << data.getStateOfCharge() << "%";
             }
             else
             {
@@ -1398,6 +1399,12 @@ void SystemManager::imu_thread_func()
                 imu_ptr_->getVelocity(vx, vy);
                 float speed_magnitude = sqrt(vx*vx + vy*vy); // Tính độ lớn vận tốc (m/s)
                 LOG_INFO << "Velocity: X=" << vx << " m/s, Y=" << vy << " m/s, Speed=" << speed_magnitude << " m/s";
+
+                 {
+                    std::lock_guard<std::mutex> lock(state_.state_mutex);
+                    state_.current_speed = speed_magnitude;
+                }
+
 
                 // Lấy vị trí
                 imu_ptr_->getPosition(px, py);
